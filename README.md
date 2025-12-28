@@ -1,6 +1,8 @@
 # Book Organizer
 
-An ImGUI-based C++ application for monitoring and organizing book files with metadata editing capabilities.
+An ImGUI C++ application for managing and syncing eBooks and PDFs.
+
+It's all vibe-coded so use at your own risk.
 
 ## Features
 

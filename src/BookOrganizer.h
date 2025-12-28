@@ -48,6 +48,12 @@ private:
     bool isEbookFile(const std::filesystem::path& filePath) const;
     std::string generateCustomFilename() const;
     void syncFilenameFieldsWithMetadata();
+    bool shouldShowNode(TreeNode* node);
+    void markParentPathsVisible(TreeNode* node);
+    void openFileInFolderNonBlocking(const std::filesystem::path& filePath);
+    void executeNonBlocking(const std::string& program, const std::vector<std::string>& args);
+    bool isCommandAvailable(const std::string& command);
+    void readMetadataFromFile(BookMetadata& book);
 
     bool initialized = false;
     std::string watchDirectory;
@@ -66,7 +72,7 @@ private:
     char authorBuffer[256];
     char yearBuffer[16];
     char publisherBuffer[256];
-    char commentsBuffer[512];
+    char commentsBuffer[1024];
     bool metadataChanged = false;
 
     // Filename generation state
@@ -82,6 +88,11 @@ private:
     char filenameAuthor[256];
     char filenamePublisher[256];
     char filenameYear[16];
+
+    // Search functionality
+    char searchBuffer[256];
+    std::string currentSearch;
+    std::unordered_map<TreeNode*, bool> nodeVisibility;
 
     // UI dimensions
     float leftPanelWidth = 750.0f;

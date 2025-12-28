@@ -4,6 +4,11 @@
 #include <iostream>
 #include <filesystem>
 #include <cstring>
+#include <cstdlib>
+#include <sstream>
+#include <vector>
+#include <unistd.h>
+#include <sys/wait.h>
 
 BookOrganizer::BookOrganizer() {
     // Initialize buffers
@@ -16,6 +21,7 @@ BookOrganizer::BookOrganizer() {
     filenameAuthor[0] = '\0';
     filenamePublisher[0] = '\0';
     filenameYear[0] = '\0';
+    searchBuffer[0] = '\0';
 }
 
 BookOrganizer::~BookOrganizer() {
@@ -71,6 +77,10 @@ void BookOrganizer::refreshBookList() {
 
     for (const auto& file : files) {
         books.emplace_back(file);
+        // Read actual metadata from ebook files
+        if (isEbookFile(file)) {
+            readMetadataFromFile(books.back());
+        }
     }
 
     // Sort books by title
@@ -223,10 +233,34 @@ void BookOrganizer::render() {
 void BookOrganizer::renderFileList() {
     ImGui::Text("Books (%zu)", books.size());
 
+    // Search input
+    ImGui::Text("Search:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText("##Search", searchBuffer, sizeof(searchBuffer))) {
+        currentSearch = searchBuffer;
+        // Clear visibility cache when search changes
+        nodeVisibility.clear();
+        // If search is empty, clear the current search to show all files
+        if (strlen(searchBuffer) == 0) {
+            currentSearch.clear();
+        }
+    }
+
+    ImGui::Spacing();
+
     if (ImGui::BeginChild("FileList", ImVec2(0, 0), true)) {
         std::lock_guard<std::mutex> lock(booksMutex);
 
         if (rootNode) {
+            // Update visibility based on search
+            if (!currentSearch.empty()) {
+                nodeVisibility.clear();
+                for (auto& child : rootNode->children) {
+                    shouldShowNode(child.get());
+                }
+            }
+
             for (auto& child : rootNode->children) {
                 renderTreeNode(child.get(), 0);
             }
@@ -237,6 +271,11 @@ void BookOrganizer::renderFileList() {
 
 void BookOrganizer::renderTreeNode(TreeNode* node, int depth) {
     if (!node) return;
+
+    // Check if this node should be shown based on search
+    if (!currentSearch.empty() && nodeVisibility.find(node) != nodeVisibility.end() && !nodeVisibility[node]) {
+        return;
+    }
 
     if (node->isDirectory) {
         // Directory node
@@ -283,6 +322,19 @@ void BookOrganizer::renderTreeNode(TreeNode* node, int depth) {
             ImGui::SetTooltip("%s", node->fullPath.string().c_str());
         }
     }
+
+    // Right-click context menu for both files and directories
+    if (ImGui::BeginPopupContextItem()) {
+        if (ImGui::MenuItem("Open")) {
+            executeNonBlocking("xdg-open", {node->fullPath.string()});
+        }
+
+        if (!node->isDirectory && ImGui::MenuItem("Open in Folder")) {
+            openFileInFolderNonBlocking(node->fullPath);
+        }
+
+        ImGui::EndPopup();
+    }
 }
 
 void BookOrganizer::renderMetadataPanel() {
@@ -299,6 +351,19 @@ void BookOrganizer::renderMetadataPanel() {
 
     ImGui::Text("File: %s", book.filePath.filename().string().c_str());
     ImGui::Text("Path: %s", book.filePath.parent_path().string().c_str());
+
+    // Open button
+    if (ImGui::Button("Open")) {
+        executeNonBlocking("xdg-open", {book.filePath.string()});
+    }
+
+    ImGui::SameLine();
+
+    // Open in folder button
+    if (ImGui::Button("Open in Folder")) {
+        openFileInFolderNonBlocking(book.filePath);
+    }
+
     ImGui::Spacing();
 
     bool isEbook = isEbookFile(book.filePath);
@@ -346,7 +411,7 @@ void BookOrganizer::renderMetadataPanel() {
 
         // Comments input (ebooks only)
         ImGui::Text("Comments:");
-        if (ImGui::InputTextMultiline("##Comments", commentsBuffer, sizeof(commentsBuffer), ImVec2(0, 60))) {
+        if (ImGui::InputTextMultiline("##Comments", commentsBuffer, sizeof(commentsBuffer), ImVec2(-1, 120), ImGuiInputTextFlags_CtrlEnterForNewLine)) {
             metadataChanged = true;
         }
     }
@@ -672,5 +737,200 @@ void BookOrganizer::syncFilenameFieldsWithMetadata() {
     if (useYearFromMetadata) {
         strncpy(filenameYear, yearBuffer, sizeof(filenameYear) - 1);
         filenameYear[sizeof(filenameYear) - 1] = '\0';
+    }
+}
+
+bool BookOrganizer::shouldShowNode(TreeNode* node) {
+    if (!node) return false;
+
+    // If no search, show everything
+    if (currentSearch.empty()) {
+        nodeVisibility[node] = true;
+        return true;
+    }
+
+    // Check if this node or any child matches
+    bool shouldShow = false;
+
+    if (!node->isDirectory) {
+        // For files, check if filename contains search string (case insensitive)
+        std::string filename = node->name;
+        std::string search = currentSearch;
+        std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
+        std::transform(search.begin(), search.end(), search.begin(), ::tolower);
+
+        if (filename.find(search) != std::string::npos) {
+            shouldShow = true;
+            // Mark all parent directories as visible
+            markParentPathsVisible(node);
+        }
+    } else {
+        // For directories, check if any child should be shown
+        for (auto& child : node->children) {
+            if (shouldShowNode(child.get())) {
+                shouldShow = true;
+            }
+        }
+    }
+
+    nodeVisibility[node] = shouldShow;
+    return shouldShow;
+}
+
+void BookOrganizer::markParentPathsVisible(TreeNode* node) {
+    TreeNode* current = node->parent;
+    while (current) {
+        nodeVisibility[current] = true;
+        current = current->parent;
+    }
+}
+
+void BookOrganizer::executeNonBlocking(const std::string& program, const std::vector<std::string>& args) {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // Child process
+        std::vector<char*> argv;
+        argv.push_back(const_cast<char*>(program.c_str()));
+
+        for (const auto& arg : args) {
+            argv.push_back(const_cast<char*>(arg.c_str()));
+        }
+        argv.push_back(nullptr);
+
+        // Redirect stdout and stderr to /dev/null to avoid output
+        freopen("/dev/null", "w", stdout);
+        freopen("/dev/null", "w", stderr);
+
+        execvp(program.c_str(), argv.data());
+        _exit(1); // If execvp fails
+    } else if (pid > 0) {
+        // Parent process - don't wait, let it run in background
+        // We could optionally use waitpid with WNOHANG to clean up zombies
+    } else {
+        // Fork failed
+        std::cerr << "Failed to fork process for: " << program << std::endl;
+    }
+}
+
+bool BookOrganizer::isCommandAvailable(const std::string& command) {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // Child process
+        freopen("/dev/null", "w", stdout);
+        freopen("/dev/null", "w", stderr);
+        execlp("which", "which", command.c_str(), nullptr);
+        _exit(1);
+    } else if (pid > 0) {
+        // Parent process
+        int status;
+        waitpid(pid, &status, 0);
+        return WEXITSTATUS(status) == 0;
+    }
+
+    return false; // Fork failed
+}
+
+void BookOrganizer::openFileInFolderNonBlocking(const std::filesystem::path& filePath) {
+    std::string filePathStr = filePath.string();
+    std::string folderPath = filePath.parent_path().string();
+
+    // Check file managers in order of preference
+    if (isCommandAvailable("nautilus")) {
+        executeNonBlocking("nautilus", {"--select", filePathStr});
+    } else if (isCommandAvailable("dolphin")) {
+        executeNonBlocking("dolphin", {"--select", filePathStr});
+    } else if (isCommandAvailable("nemo")) {
+        executeNonBlocking("nemo", {folderPath});
+    } else {
+        // Fallback to opening the folder
+        executeNonBlocking("xdg-open", {folderPath});
+    }
+}
+
+void BookOrganizer::readMetadataFromFile(BookMetadata& book) {
+    if (!isEbookFile(book.filePath)) {
+        return;
+    }
+
+    std::string command = "ebook-meta \"" + book.filePath.string() + "\" 2>/dev/null";
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) {
+        return;
+    }
+
+    char buffer[1024];
+    std::string result;
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result += buffer;
+    }
+    pclose(pipe);
+
+    // Track if we found any metadata
+    bool foundMetadata = false;
+
+    // Parse the ebook-meta output
+    std::istringstream stream(result);
+    std::string line;
+
+    while (std::getline(stream, line)) {
+        if (line.find("Title               :") != std::string::npos) {
+            size_t pos = line.find(":") + 1;
+            if (pos < line.length()) {
+                book.title = line.substr(pos);
+                // Trim whitespace
+                book.title.erase(0, book.title.find_first_not_of(" \t"));
+                book.title.erase(book.title.find_last_not_of(" \t") + 1);
+                foundMetadata = true;
+            }
+        } else if (line.find("Author(s)           :") != std::string::npos) {
+            size_t pos = line.find(":") + 1;
+            if (pos < line.length()) {
+                book.author = line.substr(pos);
+                // Trim whitespace
+                book.author.erase(0, book.author.find_first_not_of(" \t"));
+                book.author.erase(book.author.find_last_not_of(" \t") + 1);
+                foundMetadata = true;
+            }
+        } else if (line.find("Published           :") != std::string::npos) {
+            size_t pos = line.find(":") + 1;
+            if (pos < line.length()) {
+                std::string published = line.substr(pos);
+                // Trim whitespace
+                published.erase(0, published.find_first_not_of(" \t"));
+                published.erase(published.find_last_not_of(" \t") + 1);
+
+                // Extract year from published date (usually in format YYYY-MM-DD)
+                if (published.length() >= 4) {
+                    book.publishYear = published.substr(0, 4);
+                }
+                foundMetadata = true;
+            }
+        } else if (line.find("Publisher           :") != std::string::npos) {
+            size_t pos = line.find(":") + 1;
+            if (pos < line.length()) {
+                book.publisher = line.substr(pos);
+                // Trim whitespace
+                book.publisher.erase(0, book.publisher.find_first_not_of(" \t"));
+                book.publisher.erase(book.publisher.find_last_not_of(" \t") + 1);
+                foundMetadata = true;
+            }
+        } else if (line.find("Comments            :") != std::string::npos) {
+            size_t pos = line.find(":") + 1;
+            if (pos < line.length()) {
+                book.comments = line.substr(pos);
+                // Trim whitespace
+                book.comments.erase(0, book.comments.find_first_not_of(" \t"));
+                book.comments.erase(book.comments.find_last_not_of(" \t") + 1);
+                foundMetadata = true;
+            }
+        }
+    }
+
+    // If no metadata was found, keep the filename-parsed metadata
+    if (!foundMetadata) {
+        // The parseFromFilename() was already called during BookMetadata construction
+        // so we don't need to do anything - just keep the existing values
     }
 }

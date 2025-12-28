@@ -1,5 +1,8 @@
 #include <iostream>
 #include <string>
+#include <filesystem>
+#include <signal.h>
+#include <sys/wait.h>
 #include <GL/gl.h>
 #include <GLFW/glfw3.h>
 #include "imgui.h"
@@ -9,6 +12,13 @@
 
 static void glfw_error_callback(int error, const char* description) {
     std::cerr << "GLFW Error " << error << ": " << description << std::endl;
+}
+
+static void sigchld_handler(int sig) {
+    // Clean up zombie processes
+    while (waitpid(-1, nullptr, WNOHANG) > 0) {
+        // Keep cleaning up children until no more are available
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -27,6 +37,13 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "Starting Book Organizer..." << std::endl;
+
+    // Set up signal handler for zombie process cleanup
+    struct sigaction sa;
+    sa.sa_handler = sigchld_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+    sigaction(SIGCHLD, &sa, nullptr);
 
     // Setup GLFW
     glfwSetErrorCallback(glfw_error_callback);
@@ -68,6 +85,33 @@ int main(int argc, char* argv[]) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    // Load better sans-serif font
+    const char* fontPaths[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf"
+    };
+
+    bool fontLoaded = false;
+    for (const char* fontPath : fontPaths) {
+        if (std::filesystem::exists(fontPath)) {
+            ImFont* font = io.Fonts->AddFontFromFileTTF(fontPath, 15.0f);
+            if (font != nullptr) {
+                fontLoaded = true;
+                std::cout << "Loaded font: " << fontPath << " (15pt)" << std::endl;
+                break;
+            }
+        }
+    }
+
+    if (!fontLoaded) {
+        std::cout << "Using default ImGui font" << std::endl;
+    }
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
