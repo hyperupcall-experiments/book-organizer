@@ -1,0 +1,24 @@
+#pragma once
+#include <string>
+#include <filesystem>
+
+struct BookMetadata {
+    std::string title;
+    std::string author;
+    std::string publishYear;
+    std::filesystem::path filePath;
+    std::filesystem::file_time_type lastModified;
+
+    BookMetadata() = default;
+
+    BookMetadata(const std::filesystem::path& path)
+        : filePath(path) {
+        parseFromFilename();
+        updateLastModified();
+    }
+
+    void parseFromFilename();
+    std::string generateFilename() const;
+    void updateLastModified();
+    bool hasChanged() const;
+};
