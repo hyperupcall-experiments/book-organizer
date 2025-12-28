@@ -8,6 +8,22 @@
 #include <filesystem>
 #include <unordered_map>
 
+enum class BookStatus {
+    NotCopied,
+    Copied,
+    CopiedDifferent
+};
+
+struct UnpairedBook {
+    std::filesystem::path filePath;
+    std::string blake2Hash;
+    std::string fileName;
+    size_t fileSize;
+    bool hasMatchingHash;
+    std::string reason;
+    std::filesystem::path correctSourcePath;
+};
+
 struct TreeNode {
     std::string name;
     std::filesystem::path fullPath;
@@ -16,6 +32,7 @@ struct TreeNode {
     std::vector<std::unique_ptr<TreeNode>> children;
     TreeNode* parent;
     BookMetadata* bookData; // only for files
+    BookStatus status = BookStatus::NotCopied;
 
     TreeNode(const std::string& n, const std::filesystem::path& path, bool isDir, TreeNode* p = nullptr)
         : name(n), fullPath(path), isDirectory(isDir), isExpanded(true), parent(p), bookData(nullptr) {}
@@ -29,6 +46,7 @@ public:
     bool initialize(const std::string& watchDirectory);
     void render();
     void shutdown();
+    void setTargetDirectory(const std::string& targetDir);
 
     bool isInitialized() const { return initialized; }
 
@@ -54,9 +72,19 @@ private:
     void executeNonBlocking(const std::string& program, const std::vector<std::string>& args);
     bool isCommandAvailable(const std::string& command);
     void readMetadataFromFile(BookMetadata& book);
+    BookStatus checkBookStatus(const BookMetadata& book);
+    std::string calculateBlake2Checksum(const std::filesystem::path& filePath);
+    void copyBookToTarget(const BookMetadata& book);
+    void updateBookStatuses();
+    void findUnpairedBooks();
+    void renderUnpairedBooksWindow();
+    void deleteUnpairedBook(const std::filesystem::path& filePath);
+    void fixUnpairedBook(const UnpairedBook& unpaired);
+    void scanTargetDirectory(std::vector<UnpairedBook>& unpairedBooks);
 
     bool initialized = false;
     std::string watchDirectory;
+    std::string targetDirectory;
     std::unique_ptr<FileWatcher> fileWatcher;
 
     std::vector<BookMetadata> books;
@@ -93,6 +121,16 @@ private:
     char searchBuffer[256];
     std::string currentSearch;
     std::unordered_map<TreeNode*, bool> nodeVisibility;
+
+    // Target directory and status functionality
+    char targetDirBuffer[1024];
+    bool showBookStatuses = false;
+    std::unordered_map<std::string, BookStatus> bookStatusCache;
+
+    // Unpaired books functionality
+    bool showUnpairedWindow = false;
+    std::vector<UnpairedBook> unpairedBooks;
+    bool scanningInProgress = false;
 
     // UI dimensions
     float leftPanelWidth = 750.0f;

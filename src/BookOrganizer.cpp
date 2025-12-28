@@ -7,8 +7,12 @@
 #include <cstdlib>
 #include <sstream>
 #include <vector>
+#include <unordered_set>
+#include <unordered_map>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <fstream>
+#include <iomanip>
 
 BookOrganizer::BookOrganizer() {
     // Initialize buffers
@@ -22,6 +26,7 @@ BookOrganizer::BookOrganizer() {
     filenamePublisher[0] = '\0';
     filenameYear[0] = '\0';
     searchBuffer[0] = '\0';
+    targetDirBuffer[0] = '\0';
 }
 
 BookOrganizer::~BookOrganizer() {
@@ -220,6 +225,11 @@ void BookOrganizer::render() {
     }
     ImGui::End();
 
+    // Render unpaired books window if open
+    if (showUnpairedWindow) {
+        renderUnpairedBooksWindow();
+    }
+
     // Show ImGui demo for debugging (optional)
     static bool show_demo = false;
     if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_F1))) {
@@ -233,6 +243,35 @@ void BookOrganizer::render() {
 void BookOrganizer::renderFileList() {
     ImGui::Text("Books (%zu)", books.size());
 
+    // Target directory input
+    ImGui::Text("Target Directory:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-200);
+    if (ImGui::InputText("##TargetDir", targetDirBuffer, sizeof(targetDirBuffer))) {
+        setTargetDirectory(targetDirBuffer);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##Target")) {
+        // Simple implementation using zenity for directory selection
+        FILE* pipe = popen("zenity --file-selection --directory 2>/dev/null", "r");
+        if (pipe) {
+            char selectedPath[1024];
+            if (fgets(selectedPath, sizeof(selectedPath), pipe) != nullptr) {
+                // Remove newline at end
+                size_t len = strlen(selectedPath);
+                if (len > 0 && selectedPath[len - 1] == '\n') {
+                    selectedPath[len - 1] = '\0';
+                }
+                strncpy(targetDirBuffer, selectedPath, sizeof(targetDirBuffer) - 1);
+                targetDirBuffer[sizeof(targetDirBuffer) - 1] = '\0';
+                setTargetDirectory(targetDirBuffer);
+            }
+            pclose(pipe);
+        }
+    }
+
+    ImGui::Spacing();
+
     // Search input
     ImGui::Text("Search:");
     ImGui::SameLine();
@@ -245,6 +284,32 @@ void BookOrganizer::renderFileList() {
         if (strlen(searchBuffer) == 0) {
             currentSearch.clear();
         }
+    }
+
+    ImGui::Spacing();
+
+    // Show book statuses checkbox
+    if (ImGui::Checkbox("Show book statuses", &showBookStatuses)) {
+        if (showBookStatuses && !targetDirectory.empty()) {
+            updateBookStatuses();
+        } else if (!showBookStatuses) {
+            // Clear status cache when disabled
+            bookStatusCache.clear();
+        }
+    }
+
+    // Find Unpaired Books button
+    if (ImGui::Button("Find Unpaired Books") && !targetDirectory.empty()) {
+        if (!scanningInProgress) {
+            findUnpairedBooks();
+        }
+    }
+    if (targetDirectory.empty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.6f, 1.0f), "(Set target directory first)");
+    } else if (scanningInProgress) {
+        ImGui::SameLine();
+        ImGui::Text("Scanning...");
     }
 
     ImGui::Spacing();
@@ -311,7 +376,28 @@ void BookOrganizer::renderTreeNode(TreeNode* node, int depth) {
             leafFlags |= ImGuiTreeNodeFlags_Selected;
         }
 
+        // Set text color based on book status if enabled
+        bool colorPushed = false;
+        if (showBookStatuses && !node->isDirectory && node->bookData) {
+            switch (node->status) {
+                case BookStatus::Copied:
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.8f, 0.0f, 1.0f)); // Green
+                    colorPushed = true;
+                    break;
+                case BookStatus::CopiedDifferent:
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.0f, 1.0f)); // Yellow
+                    colorPushed = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+
         bool nodeClicked = ImGui::TreeNodeEx(displayName.c_str(), leafFlags);
+
+        if (colorPushed) {
+            ImGui::PopStyleColor();
+        }
 
         if (ImGui::IsItemClicked()) {
             selectBook(node->bookData);
@@ -329,8 +415,20 @@ void BookOrganizer::renderTreeNode(TreeNode* node, int depth) {
             executeNonBlocking("xdg-open", {node->fullPath.string()});
         }
 
-        if (!node->isDirectory && ImGui::MenuItem("Open in Folder")) {
-            openFileInFolderNonBlocking(node->fullPath);
+        if (!node->isDirectory) {
+            if (ImGui::MenuItem("Open in Folder")) {
+                openFileInFolderNonBlocking(node->fullPath);
+            }
+
+            // Show Copy option for files when target directory is set
+            if (!targetDirectory.empty()) {
+                ImGui::Separator();
+                if (ImGui::MenuItem("Copy")) {
+                    if (node->bookData) {
+                        copyBookToTarget(*node->bookData);
+                    }
+                }
+            }
         }
 
         ImGui::EndPopup();
@@ -362,6 +460,17 @@ void BookOrganizer::renderMetadataPanel() {
     // Open in folder button
     if (ImGui::Button("Open in Folder")) {
         openFileInFolderNonBlocking(book.filePath);
+    }
+
+    // Show copy button if book status is CopiedDifferent
+    if (showBookStatuses && !targetDirectory.empty()) {
+        BookStatus status = checkBookStatus(book);
+        if (status == BookStatus::CopiedDifferent) {
+            ImGui::SameLine();
+            if (ImGui::Button("Copy File")) {
+                copyBookToTarget(book);
+            }
+        }
     }
 
     ImGui::Spacing();
@@ -846,6 +955,394 @@ void BookOrganizer::openFileInFolderNonBlocking(const std::filesystem::path& fil
     } else {
         // Fallback to opening the folder
         executeNonBlocking("xdg-open", {folderPath});
+    }
+}
+
+void BookOrganizer::setTargetDirectory(const std::string& targetDir) {
+    targetDirectory = targetDir;
+
+    // Update the UI buffer as well for consistency
+    strncpy(targetDirBuffer, targetDirectory.c_str(), sizeof(targetDirBuffer) - 1);
+    targetDirBuffer[sizeof(targetDirBuffer) - 1] = '\0';
+
+    if (showBookStatuses && !targetDirectory.empty()) {
+        updateBookStatuses();
+    }
+}
+
+BookStatus BookOrganizer::checkBookStatus(const BookMetadata& book) {
+    if (targetDirectory.empty()) {
+        return BookStatus::NotCopied;
+    }
+
+    // Get relative path from watch directory
+    std::filesystem::path relativePath = std::filesystem::relative(book.filePath, watchDirectory);
+    std::filesystem::path targetPath = std::filesystem::path(targetDirectory) / relativePath;
+
+    if (!std::filesystem::exists(targetPath)) {
+        return BookStatus::NotCopied;
+    }
+
+    // File exists, check if checksums are different
+    std::string sourceChecksum = calculateBlake2Checksum(book.filePath);
+    std::string targetChecksum = calculateBlake2Checksum(targetPath);
+
+    if (sourceChecksum.empty() || targetChecksum.empty()) {
+        return BookStatus::Copied; // Assume copied if we can't verify
+    }
+
+    if (sourceChecksum == targetChecksum) {
+        return BookStatus::Copied;
+    } else {
+        return BookStatus::CopiedDifferent;
+    }
+}
+
+std::string BookOrganizer::calculateBlake2Checksum(const std::filesystem::path& filePath) {
+    if (!std::filesystem::exists(filePath)) {
+        return "";
+    }
+
+    std::string command = "b2sum \"" + filePath.string() + "\" 2>/dev/null";
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) {
+        return "";
+    }
+
+    char buffer[1024];
+    std::string result;
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result += buffer;
+    }
+    pclose(pipe);
+
+    // Extract just the checksum (first 64 characters)
+    if (result.length() >= 64) {
+        return result.substr(0, 64);
+    }
+
+    return "";
+}
+
+void BookOrganizer::copyBookToTarget(const BookMetadata& book) {
+    if (targetDirectory.empty()) {
+        std::cerr << "No target directory set" << std::endl;
+        return;
+    }
+
+    // Get relative path and create target path
+    std::filesystem::path relativePath = std::filesystem::relative(book.filePath, watchDirectory);
+    std::filesystem::path targetPath = std::filesystem::path(targetDirectory) / relativePath;
+
+    // Create target directory if it doesn't exist
+    std::error_code ec_dir;
+    std::filesystem::create_directories(targetPath.parent_path(), ec_dir);
+    if (ec_dir) {
+        std::cerr << "Failed to create target directory: " << ec_dir.message() << std::endl;
+        return;
+    }
+
+    // Copy the file
+    std::error_code ec;
+    std::filesystem::copy_file(book.filePath, targetPath,
+                              std::filesystem::copy_options::overwrite_existing, ec);
+
+    if (!ec) {
+        std::cout << "Successfully copied: " << book.filePath.filename().string()
+                  << " to " << targetPath.string() << std::endl;
+
+        // Update status cache immediately
+        bookStatusCache[book.filePath.string()] = BookStatus::Copied;
+
+        // Update tree node status immediately
+        std::function<void(TreeNode*)> updateNodeStatusImmediate = [&](TreeNode* node) {
+            if (node->bookData && node->bookData->filePath == book.filePath) {
+                node->status = BookStatus::Copied;
+            }
+            for (auto& child : node->children) {
+                updateNodeStatusImmediate(child.get());
+            }
+        };
+
+        if (rootNode) {
+            updateNodeStatusImmediate(rootNode.get());
+        }
+    } else {
+        std::cerr << "Failed to copy file: " << ec.message() << std::endl;
+    }
+}
+
+void BookOrganizer::updateBookStatuses() {
+    if (targetDirectory.empty()) {
+        return;
+    }
+
+    bookStatusCache.clear();
+
+    // Update status for all books and their tree nodes
+    for (auto& book : books) {
+        BookStatus status = checkBookStatus(book);
+        bookStatusCache[book.filePath.string()] = status;
+    }
+
+    // Update tree node statuses
+    std::function<void(TreeNode*)> updateNodeStatus = [&](TreeNode* node) {
+        if (node->bookData) {
+            auto it = bookStatusCache.find(node->bookData->filePath.string());
+            if (it != bookStatusCache.end()) {
+                node->status = it->second;
+            }
+        }
+        for (auto& child : node->children) {
+            updateNodeStatus(child.get());
+        }
+    };
+
+    if (rootNode) {
+        updateNodeStatus(rootNode.get());
+    }
+}
+
+void BookOrganizer::findUnpairedBooks() {
+    if (targetDirectory.empty()) {
+        return;
+    }
+
+    scanningInProgress = true;
+    unpairedBooks.clear();
+    scanTargetDirectory(unpairedBooks);
+    scanningInProgress = false;
+    showUnpairedWindow = true;
+}
+
+void BookOrganizer::scanTargetDirectory(std::vector<UnpairedBook>& unpairedBooks) {
+    std::cout << "Scanning target directory: " << targetDirectory << std::endl;
+
+    // Collect all source book paths and hashes for comparison
+    std::unordered_set<std::string> sourceHashes;
+    std::unordered_set<std::string> sourcePaths;
+    std::unordered_map<std::string, std::filesystem::path> hashToSourcePath;
+
+    for (const auto& book : books) {
+        // Add relative path
+        std::filesystem::path relativePath = std::filesystem::relative(book.filePath, watchDirectory);
+        sourcePaths.insert(relativePath.string());
+
+        // Add hash if we can calculate it
+        std::string hash = calculateBlake2Checksum(book.filePath);
+        if (!hash.empty()) {
+            sourceHashes.insert(hash);
+            hashToSourcePath[hash] = relativePath;
+        }
+    }
+
+    // Recursively scan target directory
+    try {
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(targetDirectory)) {
+            if (entry.is_regular_file()) {
+                std::filesystem::path filePath = entry.path();
+                std::string fileName = filePath.filename().string();
+
+                // Skip hidden files and non-book files
+                if (fileName.empty() || fileName[0] == '.') {
+                    continue;
+                }
+
+                // Check if it's a book-like file
+                std::string ext = filePath.extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext != ".epub" && ext != ".pdf" && ext != ".mobi" && ext != ".azw" &&
+                    ext != ".azw3" && ext != ".fb2" && ext != ".lit") {
+                    continue;
+                }
+
+                // Get relative path from target directory
+                std::filesystem::path targetRelativePath = std::filesystem::relative(filePath, targetDirectory);
+
+                // Check if this file exists in source (by path)
+                bool foundByPath = sourcePaths.find(targetRelativePath.string()) != sourcePaths.end();
+
+                // Check if this file exists in source (by hash)
+                std::string targetHash = calculateBlake2Checksum(filePath);
+                bool foundByHash = !targetHash.empty() && sourceHashes.find(targetHash) != sourceHashes.end();
+
+                // If not found by path OR found by hash but not by path (wrong location), it's unpaired
+                if (!foundByPath) {
+                    UnpairedBook unpaired;
+                    unpaired.filePath = filePath;
+                    unpaired.blake2Hash = targetHash;
+                    unpaired.fileName = fileName;
+                    unpaired.fileSize = std::filesystem::file_size(filePath);
+                    unpaired.hasMatchingHash = foundByHash;
+
+                    if (foundByHash) {
+                        unpaired.reason = "Wrong file path (content matches source file)";
+                        // Store the correct source path for fixing
+                        auto it = hashToSourcePath.find(targetHash);
+                        if (it != hashToSourcePath.end()) {
+                            unpaired.correctSourcePath = it->second;
+                        }
+                    } else {
+                        unpaired.reason = "File not found in source directory";
+                    }
+
+                    unpairedBooks.push_back(unpaired);
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error scanning target directory: " << e.what() << std::endl;
+    }
+
+    std::cout << "Found " << unpairedBooks.size() << " unpaired books" << std::endl;
+}
+
+void BookOrganizer::renderUnpairedBooksWindow() {
+    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(100, 100), ImGuiCond_FirstUseEver);
+
+    if (ImGui::Begin("Unpaired Books", &showUnpairedWindow)) {
+        ImGui::Text("Found %zu unpaired books in target directory", unpairedBooks.size());
+        ImGui::Text("These files exist in the target directory but not in the correct location.");
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Yellow");
+        ImGui::SameLine();
+        ImGui::Text("= Wrong location (fixable)");
+        ImGui::SameLine(300);
+        ImGui::TextColored(ImVec4(0.8f, 0.3f, 0.3f, 1.0f), "Red");
+        ImGui::SameLine();
+        ImGui::Text("= Not found in source");
+        ImGui::Separator();
+
+        if (unpairedBooks.empty()) {
+            ImGui::TextColored(ImVec4(0.0f, 0.8f, 0.0f, 1.0f), "No unpaired books found! All files in target are paired with source.");
+        } else {
+            if (ImGui::BeginChild("UnpairedList", ImVec2(0, 0), true)) {
+                for (size_t i = 0; i < unpairedBooks.size(); i++) {
+                    const auto& unpaired = unpairedBooks[i];
+
+                    ImGui::PushID(static_cast<int>(i));
+
+                    // File name with color coding
+                    if (unpaired.hasMatchingHash) {
+                        // Yellow for wrong location
+                        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "%s", unpaired.fileName.c_str());
+                    } else {
+                        // Red for completely missing
+                        ImGui::TextColored(ImVec4(0.8f, 0.3f, 0.3f, 1.0f), "%s", unpaired.fileName.c_str());
+                    }
+
+                    // Show file size on same line
+                    ImGui::SameLine();
+                    ImGui::Text("(");
+                    ImGui::SameLine();
+                    if (unpaired.fileSize < 1024) {
+                        ImGui::Text("%zu B", unpaired.fileSize);
+                    } else if (unpaired.fileSize < 1024 * 1024) {
+                        ImGui::Text("%.1f KB", unpaired.fileSize / 1024.0);
+                    } else {
+                        ImGui::Text("%.1f MB", unpaired.fileSize / (1024.0 * 1024.0));
+                    }
+                    ImGui::SameLine();
+                    ImGui::Text(")");
+
+                    // Show tooltip with details on hover
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        ImGui::Text("Full Path: %s", unpaired.filePath.string().c_str());
+                        ImGui::Text("BLAKE2 Hash: %s", unpaired.blake2Hash.c_str());
+                        ImGui::Text("File Size: %zu bytes (%.2f KB)", unpaired.fileSize, unpaired.fileSize / 1024.0);
+                        ImGui::Text("Reason: %s", unpaired.reason.c_str());
+                        if (unpaired.hasMatchingHash) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Content matches source but wrong location");
+                            ImGui::Text("Should be at: %s", unpaired.correctSourcePath.string().c_str());
+                        }
+                        ImGui::EndTooltip();
+                    }
+
+                    // Action button on same line
+                    ImGui::SameLine(ImGui::GetWindowWidth() - 80);
+
+                    if (unpaired.hasMatchingHash) {
+                        // Fix button for files with matching content
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 0.8f));
+                        if (ImGui::Button("Fix")) {
+                            fixUnpairedBook(unpaired);
+                            // Remove from vector
+                            unpairedBooks.erase(unpairedBooks.begin() + i);
+                            ImGui::PopStyleColor();
+                            ImGui::PopID();
+                            break; // Break to avoid iterator invalidation
+                        }
+                        ImGui::PopStyleColor();
+                    } else {
+                        // Delete button for files not in source
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 0.8f));
+                        if (ImGui::Button("Delete")) {
+                            deleteUnpairedBook(unpaired.filePath);
+                            // Remove from vector
+                            unpairedBooks.erase(unpairedBooks.begin() + i);
+                            ImGui::PopStyleColor();
+                            ImGui::PopID();
+                            break; // Break to avoid iterator invalidation
+                        }
+                        ImGui::PopStyleColor();
+                    }
+
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+        }
+    }
+    ImGui::End();
+}
+
+void BookOrganizer::fixUnpairedBook(const UnpairedBook& unpaired) {
+    try {
+        // Calculate the correct target path
+        std::filesystem::path correctTargetPath = std::filesystem::path(targetDirectory) / unpaired.correctSourcePath;
+
+        // Create target directory if it doesn't exist
+        std::filesystem::create_directories(correctTargetPath.parent_path());
+
+        // Check if target file already exists
+        if (std::filesystem::exists(correctTargetPath)) {
+            // If target exists and has same hash, just delete the misplaced file
+            std::string existingHash = calculateBlake2Checksum(correctTargetPath);
+            if (existingHash == unpaired.blake2Hash) {
+                std::filesystem::remove(unpaired.filePath);
+                std::cout << "Removed duplicate file: " << unpaired.filePath.filename().string()
+                          << " (correct file already exists at " << correctTargetPath.string() << ")" << std::endl;
+                return;
+            } else {
+                // Different content - backup existing file
+                std::filesystem::path backupPath = correctTargetPath.string() + ".backup";
+                std::filesystem::rename(correctTargetPath, backupPath);
+                std::cout << "Backed up existing file to: " << backupPath.string() << std::endl;
+            }
+        }
+
+        // Move the file to the correct location
+        std::filesystem::rename(unpaired.filePath, correctTargetPath);
+
+        std::cout << "Successfully moved: " << unpaired.filePath.filename().string()
+                  << " -> " << correctTargetPath.string() << std::endl;
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error fixing file " << unpaired.filePath.string() << ": " << e.what() << std::endl;
+    }
+}
+
+void BookOrganizer::deleteUnpairedBook(const std::filesystem::path& filePath) {
+    try {
+        if (std::filesystem::remove(filePath)) {
+            std::cout << "Successfully deleted: " << filePath.string() << std::endl;
+        } else {
+            std::cerr << "Failed to delete: " << filePath.string() << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error deleting file " << filePath.string() << ": " << e.what() << std::endl;
     }
 }
 
