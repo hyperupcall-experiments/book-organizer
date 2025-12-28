@@ -75,11 +75,91 @@ void BookOrganizer::refreshBookList() {
         return titleA < titleB;
     });
 
-    // Reset selection if it's out of bounds
-    if (selectedBookIndex >= static_cast<int>(books.size())) {
-        selectedBookIndex = -1;
+    // Build tree structure
+    buildTree();
+
+    // Reset selection if the selected book no longer exists
+    if (selectedBook) {
+        bool found = false;
+        for (const auto& book : books) {
+            if (&book == selectedBook) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            selectedBook = nullptr;
+        }
     }
 }
+
+void BookOrganizer::buildTree() {
+    rootNode = std::make_unique<TreeNode>("Root", watchDirectory, true);
+    pathToNode.clear();
+    pathToNode[watchDirectory] = rootNode.get();
+
+    std::filesystem::path rootPath(watchDirectory);
+
+    for (auto& book : books) {
+        std::filesystem::path relativePath = std::filesystem::relative(book.filePath, rootPath);
+        TreeNode* currentNode = rootNode.get();
+
+        // Build path to file
+        std::filesystem::path buildPath = rootPath;
+        for (const auto& component : relativePath.parent_path()) {
+            buildPath /= component;
+            TreeNode* childNode = findOrCreateNode(buildPath);
+            if (!childNode) {
+                // Create directory node
+                auto newNode = std::make_unique<TreeNode>(component.string(), buildPath, true, currentNode);
+                childNode = newNode.get();
+                pathToNode[buildPath.string()] = childNode;
+                currentNode->children.push_back(std::move(newNode));
+                currentNode = childNode;
+            } else {
+                currentNode = childNode;
+            }
+        }
+
+        // Create file node
+        auto fileNode = std::make_unique<TreeNode>(relativePath.filename().string(), book.filePath, false, currentNode);
+        fileNode->bookData = &book;
+        currentNode->children.push_back(std::move(fileNode));
+    }
+
+    // Sort all nodes
+    sortTreeNode(rootNode.get());
+}
+
+TreeNode* BookOrganizer::findOrCreateNode(const std::filesystem::path& path) {
+    auto it = pathToNode.find(path.string());
+    return (it != pathToNode.end()) ? it->second : nullptr;
+}
+
+void BookOrganizer::sortTreeNode(TreeNode* node) {
+    if (!node) return;
+
+    // Sort children: directories first, then files, both alphabetically
+    std::sort(node->children.begin(), node->children.end(),
+              [](const std::unique_ptr<TreeNode>& a, const std::unique_ptr<TreeNode>& b) {
+                  if (a->isDirectory != b->isDirectory) {
+                      return a->isDirectory > b->isDirectory; // directories first
+                  }
+
+                  std::string nameA = a->name;
+                  std::string nameB = b->name;
+                  std::transform(nameA.begin(), nameA.end(), nameA.begin(), ::tolower);
+                  std::transform(nameB.begin(), nameB.end(), nameB.begin(), ::tolower);
+                  return nameA < nameB;
+              });
+
+    // Recursively sort children
+    for (auto& child : node->children) {
+        sortTreeNode(child.get());
+    }
+}
+
+
 
 void BookOrganizer::render() {
     if (!initialized) {
@@ -142,49 +222,87 @@ void BookOrganizer::renderFileList() {
     if (ImGui::BeginChild("FileList", ImVec2(0, 0), true)) {
         std::lock_guard<std::mutex> lock(booksMutex);
 
-        for (int i = 0; i < static_cast<int>(books.size()); ++i) {
-            const auto& book = books[i];
-
-            std::string displayName = book.title.empty() ?
-                book.filePath.stem().string() : book.title;
-
-            if (!book.author.empty()) {
-                displayName += " - " + book.author;
-            }
-
-            if (!book.publishYear.empty()) {
-                displayName += " (" + book.publishYear + ")";
-            }
-
-            // Add file extension for clarity
-            displayName += " [" + book.filePath.extension().string() + "]";
-
-            bool isSelected = (selectedBookIndex == i);
-
-            if (ImGui::Selectable(displayName.c_str(), isSelected)) {
-                selectBook(i);
-            }
-
-            // Show tooltip with full path
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%s", book.filePath.string().c_str());
+        if (rootNode) {
+            for (auto& child : rootNode->children) {
+                renderTreeNode(child.get(), 0);
             }
         }
     }
     ImGui::EndChild();
 }
 
+void BookOrganizer::renderTreeNode(TreeNode* node, int depth) {
+    if (!node) return;
+
+    if (node->isDirectory) {
+        // Directory node
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+
+        if (node->isExpanded) {
+            flags |= ImGuiTreeNodeFlags_DefaultOpen;
+        }
+
+        bool nodeOpen = ImGui::TreeNodeEx(node->name.c_str(), flags);
+        node->isExpanded = nodeOpen;
+
+        if (nodeOpen) {
+            for (auto& child : node->children) {
+                renderTreeNode(child.get(), depth + 1);
+            }
+            ImGui::TreePop();
+        }
+    } else {
+        // File node - use TreeNodeEx as leaf
+        std::string displayName;
+        if (node->bookData) {
+            displayName = node->bookData->title.empty() ?
+                node->bookData->filePath.stem().string() : node->bookData->title;
+
+            if (!node->bookData->author.empty()) {
+                displayName += " - " + node->bookData->author;
+            }
+
+            if (!node->bookData->publishYear.empty()) {
+                displayName += " (" + node->bookData->publishYear + ")";
+            }
+
+            // Add file extension for clarity
+            displayName += " [" + node->bookData->filePath.extension().string() + "]";
+        } else {
+            displayName = node->name;
+        }
+
+        ImGuiTreeNodeFlags leafFlags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        bool isSelected = (selectedBook == node->bookData);
+
+        if (isSelected) {
+            leafFlags |= ImGuiTreeNodeFlags_Selected;
+        }
+
+        bool nodeClicked = ImGui::TreeNodeEx(displayName.c_str(), leafFlags);
+
+        if (ImGui::IsItemClicked()) {
+            selectBook(node->bookData);
+        }
+
+        // Show tooltip with full path
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", node->fullPath.string().c_str());
+        }
+    }
+}
+
 void BookOrganizer::renderMetadataPanel() {
     ImGui::Text("Metadata Editor");
     ImGui::Separator();
 
-    if (selectedBookIndex < 0 || selectedBookIndex >= static_cast<int>(books.size())) {
+    if (!selectedBook) {
         ImGui::Text("No book selected");
         return;
     }
 
     std::lock_guard<std::mutex> lock(booksMutex);
-    const auto& book = books[selectedBookIndex];
+    const auto& book = *selectedBook;
 
     ImGui::Text("File: %s", book.filePath.filename().string().c_str());
     ImGui::Text("Path: %s", book.filePath.parent_path().string().c_str());
@@ -233,38 +351,36 @@ void BookOrganizer::renderMetadataPanel() {
 
     // Reset button
     if (ImGui::Button("Reset")) {
-        selectBook(selectedBookIndex); // Reload original values
+        selectBook(selectedBook); // Reload original values
     }
 }
 
-void BookOrganizer::selectBook(int index) {
-    if (index < 0 || index >= static_cast<int>(books.size())) {
-        selectedBookIndex = -1;
+void BookOrganizer::selectBook(BookMetadata* book) {
+    if (!book) {
+        selectedBook = nullptr;
         return;
     }
 
-    selectedBookIndex = index;
+    selectedBook = book;
     metadataChanged = false;
 
-    const auto& book = books[index];
-
     // Copy current metadata to edit buffers
-    strncpy(titleBuffer, book.title.c_str(), sizeof(titleBuffer) - 1);
+    strncpy(titleBuffer, book->title.c_str(), sizeof(titleBuffer) - 1);
     titleBuffer[sizeof(titleBuffer) - 1] = '\0';
 
-    strncpy(authorBuffer, book.author.c_str(), sizeof(authorBuffer) - 1);
+    strncpy(authorBuffer, book->author.c_str(), sizeof(authorBuffer) - 1);
     authorBuffer[sizeof(authorBuffer) - 1] = '\0';
 
-    strncpy(yearBuffer, book.publishYear.c_str(), sizeof(yearBuffer) - 1);
+    strncpy(yearBuffer, book->publishYear.c_str(), sizeof(yearBuffer) - 1);
     yearBuffer[sizeof(yearBuffer) - 1] = '\0';
 }
 
 void BookOrganizer::updateBookMetadata() {
-    if (selectedBookIndex < 0 || selectedBookIndex >= static_cast<int>(books.size())) {
+    if (!selectedBook) {
         return;
     }
 
-    auto& book = books[selectedBookIndex];
+    auto& book = *selectedBook;
 
     // Update metadata
     book.title = titleBuffer;

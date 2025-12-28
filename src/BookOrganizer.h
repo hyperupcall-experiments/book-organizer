@@ -5,6 +5,21 @@
 #include <memory>
 #include <string>
 #include <mutex>
+#include <filesystem>
+#include <unordered_map>
+
+struct TreeNode {
+    std::string name;
+    std::filesystem::path fullPath;
+    bool isDirectory;
+    bool isExpanded;
+    std::vector<std::unique_ptr<TreeNode>> children;
+    TreeNode* parent;
+    BookMetadata* bookData; // only for files
+
+    TreeNode(const std::string& n, const std::filesystem::path& path, bool isDir, TreeNode* p = nullptr)
+        : name(n), fullPath(path), isDirectory(isDir), isExpanded(true), parent(p), bookData(nullptr) {}
+};
 
 class BookOrganizer {
 public:
@@ -20,11 +35,15 @@ public:
 private:
     void onFileChanged(const std::filesystem::path& path, bool isNew);
     void refreshBookList();
+    void buildTree();
     void renderFileList();
+    void renderTreeNode(TreeNode* node, int depth = 0);
     void renderMetadataPanel();
-    void selectBook(int index);
+    void selectBook(BookMetadata* book);
     void updateBookMetadata();
     bool renameBookFile(const BookMetadata& book, const std::string& newFilename);
+    TreeNode* findOrCreateNode(const std::filesystem::path& path);
+    void sortTreeNode(TreeNode* node);
 
     bool initialized = false;
     std::string watchDirectory;
@@ -33,7 +52,10 @@ private:
     std::vector<BookMetadata> books;
     mutable std::mutex booksMutex;
 
-    int selectedBookIndex = -1;
+    // Tree structure
+    std::unique_ptr<TreeNode> rootNode;
+    std::unordered_map<std::string, TreeNode*> pathToNode;
+    BookMetadata* selectedBook = nullptr;
 
     // UI state for editing
     char titleBuffer[256];

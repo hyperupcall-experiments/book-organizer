@@ -57,11 +57,6 @@ set(EFSW_TEST_SOURCES
 )
 
 add_executable(${PROJECT_NAME} ${APP_SOURCES} ${IMGUI_SOURCES})
-add_executable(TestWindow ${TEST_SOURCES} ${IMGUI_SOURCES})
-
-if(EFSW_AVAILABLE)
-    add_executable(TestEfsw ${EFSW_TEST_SOURCES})
-endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${IMGUI_DIR}
@@ -77,19 +72,6 @@ else()
     target_compile_definitions(${PROJECT_NAME} PRIVATE EFSW_AVAILABLE=0)
 endif()
 
-target_include_directories(TestWindow PRIVATE
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-    ${OPENGL_INCLUDE_DIRS}
-)
-
-if(EFSW_AVAILABLE)
-    target_include_directories(TestEfsw PRIVATE
-        ${EFSW_DIR}/include
-    )
-    target_compile_definitions(TestEfsw PRIVATE EFSW_AVAILABLE=1)
-endif()
-
 # No need for manual platform libraries - efsw handles this
 
 # Link libraries based on what we found
@@ -99,34 +81,19 @@ if(glfw3_FOUND)
         ${OPENGL_LIBRARIES}
         pthread
     )
-    target_link_libraries(TestWindow
-        glfw
-        ${OPENGL_LIBRARIES}
-        pthread
-    )
-    if(EFSW_AVAILABLE)
-        target_link_libraries(${PROJECT_NAME} efsw)
-        target_link_libraries(TestEfsw efsw pthread)
-    endif()
 else()
     target_link_libraries(${PROJECT_NAME}
         ${GLFW3_LIBRARIES}
         ${OPENGL_LIBRARIES}
         pthread
     )
-    target_link_libraries(TestWindow
-        ${GLFW3_LIBRARIES}
-        ${OPENGL_LIBRARIES}
-        pthread
-    )
-    if(EFSW_AVAILABLE)
-        target_link_libraries(${PROJECT_NAME} efsw)
-        target_link_libraries(TestEfsw efsw pthread)
-    endif()
     target_include_directories(${PROJECT_NAME} PRIVATE ${GLFW3_INCLUDE_DIRS})
-    target_include_directories(TestWindow PRIVATE ${GLFW3_INCLUDE_DIRS})
     target_compile_options(${PROJECT_NAME} PRIVATE ${GLFW3_CFLAGS_OTHER})
-    target_compile_options(TestWindow PRIVATE ${GLFW3_CFLAGS_OTHER})
+endif()
+
+# Always link efsw if available
+if(EFSW_AVAILABLE)
+    target_link_libraries(${PROJECT_NAME} efsw)
 endif()
 
 # Create directories
