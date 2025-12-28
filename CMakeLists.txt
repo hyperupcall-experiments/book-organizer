@@ -18,10 +18,8 @@ endif()
 set(EFSW_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/efsw)
 if(EXISTS ${EFSW_DIR}/CMakeLists.txt)
     add_subdirectory(${EFSW_DIR} EXCLUDE_FROM_ALL)
-    set(EFSW_AVAILABLE TRUE)
 else()
-    set(EFSW_AVAILABLE FALSE)
-    message(WARNING "efsw not found, file watching will be disabled")
+    message(FATAL_ERROR "efsw not found, it is required for the application")
 endif()
 
 # Dear ImGui
@@ -41,20 +39,10 @@ set(APP_SOURCES
     src/main.cpp
     src/BookOrganizer.cpp
     src/FileWatcher.cpp
-    src/EfswFileWatcher.cpp
-    src/FallbackFileWatcher.cpp
     src/BookMetadata.cpp
 )
 
-# Test sources
-set(TEST_SOURCES
-    test_window.cpp
-)
 
-# efsw test sources
-set(EFSW_TEST_SOURCES
-    test_efsw.cpp
-)
 
 add_executable(${PROJECT_NAME} ${APP_SOURCES} ${IMGUI_SOURCES})
 
@@ -63,14 +51,8 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${IMGUI_DIR}/backends
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${OPENGL_INCLUDE_DIRS}
+    ${EFSW_DIR}/include
 )
-
-if(EFSW_AVAILABLE)
-    target_include_directories(${PROJECT_NAME} PRIVATE ${EFSW_DIR}/include)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE EFSW_AVAILABLE=1)
-else()
-    target_compile_definitions(${PROJECT_NAME} PRIVATE EFSW_AVAILABLE=0)
-endif()
 
 # No need for manual platform libraries - efsw handles this
 
@@ -80,20 +62,17 @@ if(glfw3_FOUND)
         glfw
         ${OPENGL_LIBRARIES}
         pthread
+        efsw
     )
 else()
     target_link_libraries(${PROJECT_NAME}
         ${GLFW3_LIBRARIES}
         ${OPENGL_LIBRARIES}
         pthread
+        efsw
     )
     target_include_directories(${PROJECT_NAME} PRIVATE ${GLFW3_INCLUDE_DIRS})
     target_compile_options(${PROJECT_NAME} PRIVATE ${GLFW3_CFLAGS_OTHER})
-endif()
-
-# Always link efsw if available
-if(EFSW_AVAILABLE)
-    target_link_libraries(${PROJECT_NAME} efsw)
 endif()
 
 # Create directories

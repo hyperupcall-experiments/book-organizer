@@ -189,10 +189,8 @@ void BookOrganizer::render() {
             ImGui::EndMenuBar();
         }
 
-        ImGui::Separator();
-
         // Create two-column layout
-        ImGui::Columns(2, "MainColumns", true);
+        ImGui::Columns(2, "MainColumns", false);
         ImGui::SetColumnWidth(0, leftPanelWidth);
 
         renderFileList();
@@ -217,7 +215,6 @@ void BookOrganizer::render() {
 
 void BookOrganizer::renderFileList() {
     ImGui::Text("Books (%zu)", books.size());
-    ImGui::Separator();
 
     if (ImGui::BeginChild("FileList", ImVec2(0, 0), true)) {
         std::lock_guard<std::mutex> lock(booksMutex);
@@ -294,7 +291,7 @@ void BookOrganizer::renderTreeNode(TreeNode* node, int depth) {
 
 void BookOrganizer::renderMetadataPanel() {
     ImGui::Text("Metadata Editor");
-    ImGui::Separator();
+    ImGui::Spacing();
 
     if (!selectedBook) {
         ImGui::Text("No book selected");
@@ -306,7 +303,7 @@ void BookOrganizer::renderMetadataPanel() {
 
     ImGui::Text("File: %s", book.filePath.filename().string().c_str());
     ImGui::Text("Path: %s", book.filePath.parent_path().string().c_str());
-    ImGui::Separator();
+    ImGui::Spacing();
 
     // Title input
     ImGui::Text("Title:");
@@ -326,7 +323,7 @@ void BookOrganizer::renderMetadataPanel() {
         metadataChanged = true;
     }
 
-    ImGui::Separator();
+    ImGui::Spacing();
 
     // Preview new filename
     if (metadataChanged) {
@@ -339,7 +336,6 @@ void BookOrganizer::renderMetadataPanel() {
         ImGui::Text("New filename: %s%s", newFilename.c_str(),
                    book.filePath.extension().string().c_str());
     }
-
     ImGui::Spacing();
 
     // Update button
