@@ -3,12 +3,19 @@
 #include <algorithm>
 #include <iostream>
 #include <filesystem>
+#include <cstring>
 
 BookOrganizer::BookOrganizer() {
     // Initialize buffers
     titleBuffer[0] = '\0';
     authorBuffer[0] = '\0';
     yearBuffer[0] = '\0';
+    publisherBuffer[0] = '\0';
+    commentsBuffer[0] = '\0';
+    filenameTitle[0] = '\0';
+    filenameAuthor[0] = '\0';
+    filenamePublisher[0] = '\0';
+    filenameYear[0] = '\0';
 }
 
 BookOrganizer::~BookOrganizer() {
@@ -252,19 +259,8 @@ void BookOrganizer::renderTreeNode(TreeNode* node, int depth) {
         // File node - use TreeNodeEx as leaf
         std::string displayName;
         if (node->bookData) {
-            displayName = node->bookData->title.empty() ?
-                node->bookData->filePath.stem().string() : node->bookData->title;
-
-            if (!node->bookData->author.empty()) {
-                displayName += " - " + node->bookData->author;
-            }
-
-            if (!node->bookData->publishYear.empty()) {
-                displayName += " (" + node->bookData->publishYear + ")";
-            }
-
-            // Add file extension for clarity
-            displayName += " [" + node->bookData->filePath.extension().string() + "]";
+            // Use exact filename
+            displayName = node->bookData->filePath.filename().string();
         } else {
             displayName = node->name;
         }
@@ -305,49 +301,192 @@ void BookOrganizer::renderMetadataPanel() {
     ImGui::Text("Path: %s", book.filePath.parent_path().string().c_str());
     ImGui::Spacing();
 
+    bool isEbook = isEbookFile(book.filePath);
+
     // Title input
     ImGui::Text("Title:");
     if (ImGui::InputText("##Title", titleBuffer, sizeof(titleBuffer))) {
         metadataChanged = true;
+        if (useTitleFromMetadata) {
+            strncpy(filenameTitle, titleBuffer, sizeof(filenameTitle) - 1);
+            filenameTitle[sizeof(filenameTitle) - 1] = '\0';
+        }
     }
 
     // Author input
-    ImGui::Text("Author:");
+    ImGui::Text("Authors:");
     if (ImGui::InputText("##Author", authorBuffer, sizeof(authorBuffer))) {
         metadataChanged = true;
+        if (useAuthorFromMetadata) {
+            strncpy(filenameAuthor, authorBuffer, sizeof(filenameAuthor) - 1);
+            filenameAuthor[sizeof(filenameAuthor) - 1] = '\0';
+        }
     }
 
-    // Publish year input
+    // Publish year input (both ebooks and PDFs)
     ImGui::Text("Publish Year:");
     if (ImGui::InputText("##Year", yearBuffer, sizeof(yearBuffer))) {
         metadataChanged = true;
+        if (useYearFromMetadata) {
+            strncpy(filenameYear, yearBuffer, sizeof(filenameYear) - 1);
+            filenameYear[sizeof(filenameYear) - 1] = '\0';
+        }
+    }
+
+    if (isEbook) {
+        // Publisher input (ebooks only)
+        ImGui::Text("Publisher:");
+        if (ImGui::InputText("##Publisher", publisherBuffer, sizeof(publisherBuffer))) {
+            metadataChanged = true;
+            if (usePublisherFromMetadata) {
+                strncpy(filenamePublisher, publisherBuffer, sizeof(filenamePublisher) - 1);
+                filenamePublisher[sizeof(filenamePublisher) - 1] = '\0';
+            }
+        }
+
+        // Comments input (ebooks only)
+        ImGui::Text("Comments:");
+        if (ImGui::InputTextMultiline("##Comments", commentsBuffer, sizeof(commentsBuffer), ImVec2(0, 60))) {
+            metadataChanged = true;
+        }
     }
 
     ImGui::Spacing();
 
-    // Preview new filename
-    if (metadataChanged) {
-        BookMetadata tempBook = book;
-        tempBook.title = titleBuffer;
-        tempBook.author = authorBuffer;
-        tempBook.publishYear = yearBuffer;
-
-        std::string newFilename = tempBook.generateFilename();
-        ImGui::Text("New filename: %s%s", newFilename.c_str(),
-                   book.filePath.extension().string().c_str());
+    // Update metadata button
+    if (ImGui::Button("Update Book Metadata") && metadataChanged) {
+        updateMetadataWithEbookMeta();
     }
+
+    ImGui::Spacing();
     ImGui::Spacing();
 
-    // Update button
-    if (ImGui::Button("Update Metadata") && metadataChanged) {
-        updateBookMetadata();
-    }
+    // Filename generation section
+    ImGui::Text("Filename Generation Options");
+    ImGui::Spacing();
 
+    // Title inclusion
+    if (ImGui::Checkbox("##IncludeTitle", &includeTitle)) {
+        // Checkbox changed
+    }
     ImGui::SameLine();
+    ImGui::Text("Title");
 
-    // Reset button
-    if (ImGui::Button("Reset")) {
-        selectBook(selectedBook); // Reload original values
+    if (includeTitle) {
+        ImGui::Indent();
+        bool titleMetadataChanged = ImGui::Checkbox("use value from metadata##Title", &useTitleFromMetadata);
+        if (titleMetadataChanged && useTitleFromMetadata) {
+            strncpy(filenameTitle, titleBuffer, sizeof(filenameTitle) - 1);
+            filenameTitle[sizeof(filenameTitle) - 1] = '\0';
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText("##FilenameTitle", filenameTitle, sizeof(filenameTitle))) {
+            if (strcmp(filenameTitle, titleBuffer) != 0) {
+                useTitleFromMetadata = false;
+            }
+        }
+        ImGui::Unindent();
+        ImGui::Spacing();
+    }
+
+    // Author inclusion
+    if (ImGui::Checkbox("##IncludeAuthor", &includeAuthor)) {
+        // Checkbox changed
+    }
+    ImGui::SameLine();
+    ImGui::Text("Author");
+
+    if (includeAuthor) {
+        ImGui::Indent();
+        bool authorMetadataChanged = ImGui::Checkbox("use value from metadata##Author", &useAuthorFromMetadata);
+        if (authorMetadataChanged && useAuthorFromMetadata) {
+            strncpy(filenameAuthor, authorBuffer, sizeof(filenameAuthor) - 1);
+            filenameAuthor[sizeof(filenameAuthor) - 1] = '\0';
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText("##FilenameAuthor", filenameAuthor, sizeof(filenameAuthor))) {
+            if (strcmp(filenameAuthor, authorBuffer) != 0) {
+                useAuthorFromMetadata = false;
+            }
+        }
+        ImGui::Unindent();
+        ImGui::Spacing();
+    }
+
+    // Publisher inclusion
+    if (ImGui::Checkbox("##IncludePublisher", &includePublisher)) {
+        // Checkbox changed
+    }
+    ImGui::SameLine();
+    ImGui::Text("Publisher");
+
+    if (includePublisher) {
+        ImGui::Indent();
+        bool publisherMetadataChanged = ImGui::Checkbox("use value from metadata##Publisher", &usePublisherFromMetadata);
+        if (publisherMetadataChanged && usePublisherFromMetadata) {
+            strncpy(filenamePublisher, publisherBuffer, sizeof(filenamePublisher) - 1);
+            filenamePublisher[sizeof(filenamePublisher) - 1] = '\0';
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText("##FilenamePublisher", filenamePublisher, sizeof(filenamePublisher))) {
+            if (strcmp(filenamePublisher, publisherBuffer) != 0) {
+                usePublisherFromMetadata = false;
+            }
+        }
+        ImGui::Unindent();
+        ImGui::Spacing();
+    }
+
+    // Year inclusion
+    if (ImGui::Checkbox("##IncludeYear", &includeYear)) {
+        // Checkbox changed
+    }
+    ImGui::SameLine();
+    ImGui::Text("Year");
+
+    if (includeYear) {
+        ImGui::Indent();
+        bool yearMetadataChanged = ImGui::Checkbox("use value from metadata##Year", &useYearFromMetadata);
+        if (yearMetadataChanged && useYearFromMetadata) {
+            strncpy(filenameYear, yearBuffer, sizeof(filenameYear) - 1);
+            filenameYear[sizeof(filenameYear) - 1] = '\0';
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText("##FilenameYear", filenameYear, sizeof(filenameYear))) {
+            if (strcmp(filenameYear, yearBuffer) != 0) {
+                useYearFromMetadata = false;
+            }
+        }
+        ImGui::Unindent();
+        ImGui::Spacing();
+    }
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+
+    // Preview and apply section
+    std::string customFilename = generateCustomFilename();
+    if (!customFilename.empty()) {
+        ImGui::Text("Preview:");
+        ImGui::TextColored(ImVec4(0.7f, 0.9f, 0.7f, 1.0f), "%s%s", customFilename.c_str(), book.filePath.extension().string().c_str());
+
+        ImGui::Spacing();
+        if (ImGui::Button("Apply Filename") && customFilename != book.filePath.stem().string()) {
+            std::string fullNewFilename = customFilename + book.filePath.extension().string();
+            if (renameBookFile(book, fullNewFilename)) {
+                std::cout << "Successfully renamed file to: " << fullNewFilename << std::endl;
+                // Clear selection to avoid stale reference - file watcher will handle refresh
+                selectedBook = nullptr;
+            } else {
+                std::cerr << "Failed to rename file" << std::endl;
+            }
+        }
+    } else {
+        ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.6f, 1.0f), "No filename elements selected");
     }
 }
 
@@ -369,6 +508,15 @@ void BookOrganizer::selectBook(BookMetadata* book) {
 
     strncpy(yearBuffer, book->publishYear.c_str(), sizeof(yearBuffer) - 1);
     yearBuffer[sizeof(yearBuffer) - 1] = '\0';
+
+    strncpy(publisherBuffer, book->publisher.c_str(), sizeof(publisherBuffer) - 1);
+    publisherBuffer[sizeof(publisherBuffer) - 1] = '\0';
+
+    strncpy(commentsBuffer, book->comments.c_str(), sizeof(commentsBuffer) - 1);
+    commentsBuffer[sizeof(commentsBuffer) - 1] = '\0';
+
+    // Sync filename fields with metadata
+    syncFilenameFieldsWithMetadata();
 }
 
 void BookOrganizer::updateBookMetadata() {
@@ -421,5 +569,108 @@ bool BookOrganizer::renameBookFile(const BookMetadata& book, const std::string& 
     } catch (const std::filesystem::filesystem_error& e) {
         std::cerr << "Failed to rename file: " << e.what() << std::endl;
         return false;
+    }
+}
+
+void BookOrganizer::updateMetadataWithEbookMeta() {
+    if (!selectedBook) {
+        return;
+    }
+
+    auto& book = *selectedBook;
+    std::string filePath = book.filePath.string();
+    std::string command = "ebook-meta";
+
+    // Add title
+    if (strlen(titleBuffer) > 0) {
+        command += " --title=\"" + std::string(titleBuffer) + "\"";
+    }
+
+    // Add authors
+    if (strlen(authorBuffer) > 0) {
+        command += " --authors=\"" + std::string(authorBuffer) + "\"";
+    }
+
+    // Add publisher (ebooks only)
+    if (isEbookFile(book.filePath) && strlen(publisherBuffer) > 0) {
+        command += " --publisher=\"" + std::string(publisherBuffer) + "\"";
+    }
+
+    // Add comments (ebooks only)
+    if (isEbookFile(book.filePath) && strlen(commentsBuffer) > 0) {
+        command += " --comments=\"" + std::string(commentsBuffer) + "\"";
+    }
+
+    command += " \"" + filePath + "\"";
+
+    // Execute the command
+    int result = system(command.c_str());
+
+    if (result == 0) {
+        // Update local metadata
+        book.title = titleBuffer;
+        book.author = authorBuffer;
+        book.publishYear = yearBuffer;
+        book.publisher = publisherBuffer;
+        book.comments = commentsBuffer;
+        metadataChanged = false;
+        std::cout << "Successfully updated metadata for: " << book.filePath.filename().string() << std::endl;
+    } else {
+        std::cerr << "Failed to update metadata with ebook-meta command" << std::endl;
+    }
+}
+
+bool BookOrganizer::isEbookFile(const std::filesystem::path& filePath) const {
+    std::string extension = filePath.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+
+    return extension == ".epub" || extension == ".mobi" || extension == ".azw" ||
+           extension == ".azw3" || extension == ".fb2" || extension == ".lit";
+}
+
+std::string BookOrganizer::generateCustomFilename() const {
+    std::string filename;
+
+    if (includeTitle && strlen(filenameTitle) > 0) {
+        filename += filenameTitle;
+    }
+
+    if (includeAuthor && strlen(filenameAuthor) > 0) {
+        if (!filename.empty()) filename += " ";
+        filename += "[" + std::string(filenameAuthor) + "]";
+    }
+
+    if (includePublisher && strlen(filenamePublisher) > 0) {
+        if (!filename.empty()) filename += " ";
+        filename += "[" + std::string(filenamePublisher) + "]";
+    }
+
+    if (includeYear && strlen(filenameYear) > 0) {
+        if (!filename.empty()) filename += " ";
+        filename += "(" + std::string(filenameYear) + ")";
+    }
+
+    return filename;
+}
+
+void BookOrganizer::syncFilenameFieldsWithMetadata() {
+    if (useTitleFromMetadata) {
+        strncpy(filenameTitle, titleBuffer, sizeof(filenameTitle) - 1);
+        filenameTitle[sizeof(filenameTitle) - 1] = '\0';
+    }
+
+    if (useAuthorFromMetadata) {
+        strncpy(filenameAuthor, authorBuffer, sizeof(filenameAuthor) - 1);
+        filenameAuthor[sizeof(filenameAuthor) - 1] = '\0';
+    }
+
+    if (usePublisherFromMetadata) {
+        strncpy(filenamePublisher, publisherBuffer, sizeof(filenamePublisher) - 1);
+        filenamePublisher[sizeof(filenamePublisher) - 1] = '\0';
+    }
+
+    if (useYearFromMetadata) {
+        strncpy(filenameYear, yearBuffer, sizeof(filenameYear) - 1);
+        filenameYear[sizeof(filenameYear) - 1] = '\0';
     }
 }

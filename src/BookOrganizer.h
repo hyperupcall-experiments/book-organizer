@@ -41,9 +41,13 @@ private:
     void renderMetadataPanel();
     void selectBook(BookMetadata* book);
     void updateBookMetadata();
+    void updateMetadataWithEbookMeta();
     bool renameBookFile(const BookMetadata& book, const std::string& newFilename);
     TreeNode* findOrCreateNode(const std::filesystem::path& path);
     void sortTreeNode(TreeNode* node);
+    bool isEbookFile(const std::filesystem::path& filePath) const;
+    std::string generateCustomFilename() const;
+    void syncFilenameFieldsWithMetadata();
 
     bool initialized = false;
     std::string watchDirectory;
@@ -61,8 +65,24 @@ private:
     char titleBuffer[256];
     char authorBuffer[256];
     char yearBuffer[16];
+    char publisherBuffer[256];
+    char commentsBuffer[512];
     bool metadataChanged = false;
 
+    // Filename generation state
+    bool includeTitle = true;
+    bool includeAuthor = true;
+    bool includePublisher = false;
+    bool includeYear = true;
+    bool useTitleFromMetadata = true;
+    bool useAuthorFromMetadata = true;
+    bool usePublisherFromMetadata = true;
+    bool useYearFromMetadata = true;
+    char filenameTitle[256];
+    char filenameAuthor[256];
+    char filenamePublisher[256];
+    char filenameYear[16];
+
     // UI dimensions
-    float leftPanelWidth = 400.0f;
+    float leftPanelWidth = 750.0f;
 };

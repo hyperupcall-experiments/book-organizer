@@ -5,8 +5,8 @@
 void BookMetadata::parseFromFilename() {
     std::string filename = filePath.stem().string();
 
-    // Try to parse format: "[title] [author] (year)"
-    std::regex pattern(R"(^(.*?)\s+([^(]+?)\s+\((\d{4})\)$)");
+    // Try to parse format: "TITLE [Author Name] (Year)" where author and year are optional
+    std::regex pattern(R"(^(.*?)(?:\s*\[([^\]]+)\])?(?:\s*\((\d{4})\))?$)");
     std::smatch matches;
 
     if (std::regex_match(filename, matches, pattern)) {
@@ -14,11 +14,15 @@ void BookMetadata::parseFromFilename() {
         author = matches[2].str();
         publishYear = matches[3].str();
 
-        // Trim whitespace
+        // Trim whitespace from title
         title.erase(0, title.find_first_not_of(" \t"));
         title.erase(title.find_last_not_of(" \t") + 1);
-        author.erase(0, author.find_first_not_of(" \t"));
-        author.erase(author.find_last_not_of(" \t") + 1);
+
+        // Trim whitespace from author if present
+        if (!author.empty()) {
+            author.erase(0, author.find_first_not_of(" \t"));
+            author.erase(author.find_last_not_of(" \t") + 1);
+        }
     } else {
         // If parsing fails, use filename as title
         title = filename;
@@ -41,7 +45,7 @@ std::string BookMetadata::generateFilename() const {
     }
 
     if (!author.empty()) {
-        oss << " " << author;
+        oss << " [" << author << "]";
     }
 
     if (!publishYear.empty()) {
