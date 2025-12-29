@@ -2,3 +2,5 @@ build/
 external/
 test_books/
 test_target/
+.cache/
+CMakeUserPresets.json

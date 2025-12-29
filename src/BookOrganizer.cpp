@@ -232,7 +232,7 @@ void BookOrganizer::render() {
 
     // Show ImGui demo for debugging (optional)
     static bool show_demo = false;
-    if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_F1))) {
+    if (ImGui::IsKeyPressed(ImGuiKey_F1)) {
         show_demo = !show_demo;
     }
     if (show_demo) {

@@ -4,35 +4,19 @@ project(BookOrganizer)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find packages
-find_package(PkgConfig REQUIRED)
-find_package(OpenGL REQUIRED)
-find_package(glfw3 QUIET)
+# Enable compile commands export for better IDE/editor support
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Try to find GLFW via CMake first, fallback to pkg-config
-if(NOT glfw3_FOUND)
-    pkg_check_modules(GLFW3 REQUIRED glfw3)
-endif()
+# Find Conan dependencies
+find_package(imgui REQUIRED)
+find_package(glfw3 REQUIRED)
+find_package(opengl_system REQUIRED)
+find_package(efsw REQUIRED)
 
-# efsw (file watcher) - use as subdirectory
-set(EFSW_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/efsw)
-if(EXISTS ${EFSW_DIR}/CMakeLists.txt)
-    add_subdirectory(${EFSW_DIR} EXCLUDE_FROM_ALL)
-else()
-    message(FATAL_ERROR "efsw not found, it is required for the application")
-endif()
-
-# Dear ImGui
-set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui)
-set(IMGUI_SOURCES
-    ${IMGUI_DIR}/imgui.cpp
-    ${IMGUI_DIR}/imgui_demo.cpp
-    ${IMGUI_DIR}/imgui_draw.cpp
-    ${IMGUI_DIR}/imgui_tables.cpp
-    ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-)
+# Use ImGui package folder variable to access backends
+# This variable is set by the Conan-generated imgui-release-x86_64-data.cmake
+set(IMGUI_BACKENDS_DIR "${imgui_PACKAGE_FOLDER_RELEASE}/res/bindings")
+message(STATUS "Using ImGui backends from: ${IMGUI_BACKENDS_DIR}")
 
 # Application sources
 set(APP_SOURCES
@@ -40,40 +24,30 @@ set(APP_SOURCES
     src/BookOrganizer.cpp
     src/FileWatcher.cpp
     src/BookMetadata.cpp
+    ${IMGUI_BACKENDS_DIR}/imgui_impl_glfw.cpp
+    ${IMGUI_BACKENDS_DIR}/imgui_impl_opengl3.cpp
 )
 
-
-
-add_executable(${PROJECT_NAME} ${APP_SOURCES} ${IMGUI_SOURCES})
+add_executable(${PROJECT_NAME} ${APP_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PRIVATE
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${OPENGL_INCLUDE_DIRS}
-    ${EFSW_DIR}/include
+    ${IMGUI_BACKENDS_DIR}
+    ${imgui_PACKAGE_FOLDER_RELEASE}/include
+    ${efsw_PACKAGE_FOLDER_RELEASE}/include
 )
 
-# No need for manual platform libraries - efsw handles this
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    imgui::imgui
+    glfw
+    opengl::opengl
+    efsw::efsw
+    pthread
+    m
+    rt
+)
 
-# Link libraries based on what we found
-if(glfw3_FOUND)
-    target_link_libraries(${PROJECT_NAME}
-        glfw
-        ${OPENGL_LIBRARIES}
-        pthread
-        efsw
-    )
-else()
-    target_link_libraries(${PROJECT_NAME}
-        ${GLFW3_LIBRARIES}
-        ${OPENGL_LIBRARIES}
-        pthread
-        efsw
-    )
-    target_include_directories(${PROJECT_NAME} PRIVATE ${GLFW3_INCLUDE_DIRS})
-    target_compile_options(${PROJECT_NAME} PRIVATE ${GLFW3_CFLAGS_OTHER})
+# Platform-specific settings
+if(UNIX AND NOT APPLE)
+    target_link_libraries(${PROJECT_NAME} PRIVATE dl)
 endif()
-
-# Create directories
-file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/external)
