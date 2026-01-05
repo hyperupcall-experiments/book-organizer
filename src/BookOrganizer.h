@@ -7,6 +7,7 @@
 #include <mutex>
 #include <filesystem>
 #include <unordered_map>
+#include <libb2/blake2.h>
 
 enum class BookStatus {
     NotCopied,

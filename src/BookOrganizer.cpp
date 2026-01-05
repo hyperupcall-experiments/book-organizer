@@ -13,6 +13,8 @@
 #include <sys/wait.h>
 #include <fstream>
 #include <iomanip>
+#include <stdexcept>
+#include <libb2/blake2.h>
 
 BookOrganizer::BookOrganizer() {
     // Initialize buffers
@@ -984,44 +986,58 @@ BookStatus BookOrganizer::checkBookStatus(const BookMetadata& book) {
     }
 
     // File exists, check if checksums are different
-    std::string sourceChecksum = calculateBlake2Checksum(book.filePath);
-    std::string targetChecksum = calculateBlake2Checksum(targetPath);
+    try {
+        std::string sourceChecksum = calculateBlake2Checksum(book.filePath);
+        std::string targetChecksum = calculateBlake2Checksum(targetPath);
 
-    if (sourceChecksum.empty() || targetChecksum.empty()) {
+        if (sourceChecksum == targetChecksum) {
+            return BookStatus::Copied;
+        } else {
+            return BookStatus::CopiedDifferent;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error calculating checksums: " << e.what() << std::endl;
         return BookStatus::Copied; // Assume copied if we can't verify
-    }
-
-    if (sourceChecksum == targetChecksum) {
-        return BookStatus::Copied;
-    } else {
-        return BookStatus::CopiedDifferent;
     }
 }
 
 std::string BookOrganizer::calculateBlake2Checksum(const std::filesystem::path& filePath) {
     if (!std::filesystem::exists(filePath)) {
-        return "";
+        throw std::runtime_error("File does not exist: " + filePath.string());
     }
 
-    std::string command = "b2sum \"" + filePath.string() + "\" 2>/dev/null";
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) {
-        return "";
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open file for reading: " + filePath.string());
     }
 
-    char buffer[1024];
-    std::string result;
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        result += buffer;
-    }
-    pclose(pipe);
-
-    // Extract just the checksum (first 64 characters)
-    if (result.length() >= 64) {
-        return result.substr(0, 64);
+    blake2b_state state;
+    if (blake2b_init(&state, BLAKE2B_OUTBYTES) != 0) {
+        throw std::runtime_error("Failed to initialize Blake2b hash state");
     }
 
-    return "";
+    constexpr size_t buffer_size = 64 * 1024; // 64KB buffer
+    std::vector<char> buffer(buffer_size);
+
+    while (file.read(buffer.data(), buffer_size) || file.gcount() > 0) {
+        if (blake2b_update(&state, buffer.data(), file.gcount()) != 0) {
+            throw std::runtime_error("Failed to update Blake2b hash with file data: " + filePath.string());
+        }
+    }
+
+    unsigned char hash[BLAKE2B_OUTBYTES];
+    if (blake2b_final(&state, hash, BLAKE2B_OUTBYTES) != 0) {
+        throw std::runtime_error("Failed to finalize Blake2b hash computation: " + filePath.string());
+    }
+
+    // Convert to hex string
+    std::ostringstream hexStream;
+    hexStream << std::hex << std::setfill('0');
+    for (size_t i = 0; i < BLAKE2B_OUTBYTES; ++i) {
+        hexStream << std::setw(2) << static_cast<unsigned>(hash[i]);
+    }
+
+    return hexStream.str();
 }
 
 void BookOrganizer::copyBookToTarget(const BookMetadata& book) {
@@ -1129,10 +1145,12 @@ void BookOrganizer::scanTargetDirectory(std::vector<UnpairedBook>& unpairedBooks
         sourcePaths.insert(relativePath.string());
 
         // Add hash if we can calculate it
-        std::string hash = calculateBlake2Checksum(book.filePath);
-        if (!hash.empty()) {
+        try {
+            std::string hash = calculateBlake2Checksum(book.filePath);
             sourceHashes.insert(hash);
             hashToSourcePath[hash] = relativePath;
+        } catch (const std::exception& e) {
+            std::cerr << "Error calculating hash for " << book.filePath.string() << ": " << e.what() << std::endl;
         }
     }
 
@@ -1163,8 +1181,14 @@ void BookOrganizer::scanTargetDirectory(std::vector<UnpairedBook>& unpairedBooks
                 bool foundByPath = sourcePaths.find(targetRelativePath.string()) != sourcePaths.end();
 
                 // Check if this file exists in source (by hash)
-                std::string targetHash = calculateBlake2Checksum(filePath);
-                bool foundByHash = !targetHash.empty() && sourceHashes.find(targetHash) != sourceHashes.end();
+                std::string targetHash;
+                bool foundByHash = false;
+                try {
+                    targetHash = calculateBlake2Checksum(filePath);
+                    foundByHash = sourceHashes.find(targetHash) != sourceHashes.end();
+                } catch (const std::exception& e) {
+                    std::cerr << "Error calculating hash for " << filePath.string() << ": " << e.what() << std::endl;
+                }
 
                 // If not found by path OR found by hash but not by path (wrong location), it's unpaired
                 if (!foundByPath) {
@@ -1309,18 +1333,22 @@ void BookOrganizer::fixUnpairedBook(const UnpairedBook& unpaired) {
         // Check if target file already exists
         if (std::filesystem::exists(correctTargetPath)) {
             // If target exists and has same hash, just delete the misplaced file
-            std::string existingHash = calculateBlake2Checksum(correctTargetPath);
-            if (existingHash == unpaired.blake2Hash) {
-                std::filesystem::remove(unpaired.filePath);
-                std::cout << "Removed duplicate file: " << unpaired.filePath.filename().string()
-                          << " (correct file already exists at " << correctTargetPath.string() << ")" << std::endl;
-                return;
-            } else {
-                // Different content - backup existing file
-                std::filesystem::path backupPath = correctTargetPath.string() + ".backup";
-                std::filesystem::rename(correctTargetPath, backupPath);
-                std::cout << "Backed up existing file to: " << backupPath.string() << std::endl;
+            try {
+                std::string existingHash = calculateBlake2Checksum(correctTargetPath);
+                if (existingHash == unpaired.blake2Hash) {
+                    std::filesystem::remove(unpaired.filePath);
+                    std::cout << "Removed duplicate file: " << unpaired.filePath.filename().string()
+                              << " (correct file already exists at " << correctTargetPath.string() << ")" << std::endl;
+                    return;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Error calculating hash for existing file " << correctTargetPath.string() << ": " << e.what() << std::endl;
             }
+
+            // Different content - backup existing file
+            std::filesystem::path backupPath = correctTargetPath.string() + ".backup";
+            std::filesystem::rename(correctTargetPath, backupPath);
+            std::cout << "Backed up existing file to: " << backupPath.string() << std::endl;
         }
 
         // Move the file to the correct location

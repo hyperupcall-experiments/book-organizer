@@ -12,6 +12,7 @@ find_package(imgui REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(opengl_system REQUIRED)
 find_package(efsw REQUIRED)
+find_package(libb2 REQUIRED)
 
 # Use ImGui package folder variable to access backends
 # This variable is set by the Conan-generated imgui-release-x86_64-data.cmake
@@ -42,6 +43,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glfw
     opengl::opengl
     efsw::efsw
+    libb2::libb2
     pthread
     m
     rt

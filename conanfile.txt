@@ -3,6 +3,7 @@ imgui/1.92.5
 glfw/3.4
 opengl/system
 efsw/1.4.1
+libb2/20190723
 
 [generators]
 CMakeToolchain
