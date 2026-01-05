@@ -48,6 +48,7 @@ public:
     void render();
     void shutdown();
     void setTargetDirectory(const std::string& targetDir);
+    void setWatchDirectory(const std::string& watchDir);
 
     bool isInitialized() const { return initialized; }
 
@@ -125,6 +126,7 @@ private:
 
     // Target directory and status functionality
     std::string targetDirBuffer;
+    std::string watchDirBuffer;
     bool showBookStatuses = false;
     std::unordered_map<std::string, BookStatus> bookStatusCache;
 

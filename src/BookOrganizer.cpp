@@ -56,6 +56,7 @@ bool BookOrganizer::initialize(const std::string& watchDir) {
     }
 
     watchDirectory = watchDir;
+    watchDirBuffer = watchDirectory; // Initialize UI buffer
 
     fileWatcher = std::make_unique<FileWatcher>(watchDirectory);
     fileWatcher->setCallback([this](const std::filesystem::path& path, bool isNew) {
@@ -219,7 +220,7 @@ void BookOrganizer::render() {
     if (ImGui::Begin("Book Organizer", nullptr, window_flags)) {
         // Menu bar
         if (ImGui::BeginMenuBar()) {
-            ImGui::Text("Watching: %s", watchDirectory.c_str());
+            ImGui::Text("Book Organizer (%zu total)", books.size());
             ImGui::EndMenuBar();
         }
 
@@ -253,7 +254,33 @@ void BookOrganizer::render() {
 }
 
 void BookOrganizer::renderFileList() {
-    ImGui::Text("Books (%zu)", books.size());
+    // Watch directory input
+    ImGui::Text("Watch Directory:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-200);
+    if (ImGuiStringInput("##WatchDir", watchDirBuffer, 1024)) {
+        setWatchDirectory(watchDirBuffer);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##Watch")) {
+        // Simple implementation using zenity for directory selection
+        FILE* pipe = popen("zenity --file-selection --directory 2>/dev/null", "r");
+        if (pipe) {
+            char selectedPath[1024];
+            if (fgets(selectedPath, sizeof(selectedPath), pipe) != nullptr) {
+                // Remove newline at end
+                size_t len = strlen(selectedPath);
+                if (len > 0 && selectedPath[len - 1] == '\n') {
+                    selectedPath[len - 1] = '\0';
+                }
+                watchDirBuffer = selectedPath;
+                setWatchDirectory(watchDirBuffer);
+            }
+            pclose(pipe);
+        }
+    }
+
+    ImGui::Spacing();
 
     // Target directory input
     ImGui::Text("Target Directory:");
@@ -281,6 +308,7 @@ void BookOrganizer::renderFileList() {
         }
     }
 
+    ImGui::Spacing();
     ImGui::Spacing();
 
     // Search input
@@ -687,6 +715,8 @@ void BookOrganizer::selectBook(BookMetadata* book) {
     syncFilenameFieldsWithMetadata();
 }
 
+
+
 void BookOrganizer::updateBookMetadata() {
     if (!selectedBook) {
         return;
@@ -956,6 +986,49 @@ void BookOrganizer::setTargetDirectory(const std::string& targetDir) {
 
     if (showBookStatuses && !targetDirectory.empty()) {
         updateBookStatuses();
+    }
+}
+
+void BookOrganizer::setWatchDirectory(const std::string& watchDir) {
+    if (watchDirectory == watchDir) {
+        return; // No change needed
+    }
+
+    // Stop current file watcher if running
+    if (fileWatcher) {
+        fileWatcher->stop();
+        fileWatcher.reset();
+    }
+
+    // Clear current books
+    {
+        std::lock_guard<std::mutex> lock(booksMutex);
+        books.clear();
+        selectedBook = nullptr;
+    }
+
+    // Clear tree structure
+    rootNode.reset();
+    pathToNode.clear();
+
+    // Set new watch directory
+    watchDirectory = watchDir;
+    watchDirBuffer = watchDirectory;
+
+    // Initialize file watcher for new directory
+    if (!watchDirectory.empty() && std::filesystem::exists(watchDirectory)) {
+        fileWatcher = std::make_unique<FileWatcher>(watchDirectory);
+        fileWatcher->setCallback([this](const std::filesystem::path& path, bool isNew) {
+            this->onFileChanged(path, isNew);
+        });
+        fileWatcher->start();
+
+        // Refresh book list for new directory
+        refreshBookList();
+
+        std::cout << "Watch directory changed to: " << watchDirectory << std::endl;
+    } else if (!watchDirectory.empty()) {
+        std::cerr << "Watch directory does not exist: " << watchDirectory << std::endl;
     }
 }
 
