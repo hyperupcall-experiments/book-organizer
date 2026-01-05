@@ -16,19 +16,29 @@
 #include <stdexcept>
 #include <libb2/blake2.h>
 
+// Helper function to handle ImGui string input properly
+namespace {
+    bool ImGuiStringInput(const char* label, std::string& str, size_t maxSize = 256, ImGuiInputTextFlags flags = 0) {
+        str.resize(maxSize);
+        bool changed = ImGui::InputText(label, str.data(), str.size(), flags);
+        if (changed) {
+            str.resize(strlen(str.data()));
+        }
+        return changed;
+    }
+
+    bool ImGuiStringInputMultiline(const char* label, std::string& str, const ImVec2& size, size_t maxSize = 1024, ImGuiInputTextFlags flags = 0) {
+        str.resize(maxSize);
+        bool changed = ImGui::InputTextMultiline(label, str.data(), str.size(), size, flags);
+        if (changed) {
+            str.resize(strlen(str.data()));
+        }
+        return changed;
+    }
+}
+
 BookOrganizer::BookOrganizer() {
-    // Initialize buffers
-    titleBuffer[0] = '\0';
-    authorBuffer[0] = '\0';
-    yearBuffer[0] = '\0';
-    publisherBuffer[0] = '\0';
-    commentsBuffer[0] = '\0';
-    filenameTitle[0] = '\0';
-    filenameAuthor[0] = '\0';
-    filenamePublisher[0] = '\0';
-    filenameYear[0] = '\0';
-    searchBuffer[0] = '\0';
-    targetDirBuffer[0] = '\0';
+    // Strings are initialized empty by default
 }
 
 BookOrganizer::~BookOrganizer() {
@@ -249,7 +259,7 @@ void BookOrganizer::renderFileList() {
     ImGui::Text("Target Directory:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-200);
-    if (ImGui::InputText("##TargetDir", targetDirBuffer, sizeof(targetDirBuffer))) {
+    if (ImGuiStringInput("##TargetDir", targetDirBuffer, 1024)) {
         setTargetDirectory(targetDirBuffer);
     }
     ImGui::SameLine();
@@ -264,8 +274,7 @@ void BookOrganizer::renderFileList() {
                 if (len > 0 && selectedPath[len - 1] == '\n') {
                     selectedPath[len - 1] = '\0';
                 }
-                strncpy(targetDirBuffer, selectedPath, sizeof(targetDirBuffer) - 1);
-                targetDirBuffer[sizeof(targetDirBuffer) - 1] = '\0';
+                targetDirBuffer = selectedPath;
                 setTargetDirectory(targetDirBuffer);
             }
             pclose(pipe);
@@ -278,12 +287,12 @@ void BookOrganizer::renderFileList() {
     ImGui::Text("Search:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::InputText("##Search", searchBuffer, sizeof(searchBuffer))) {
+    if (ImGuiStringInput("##Search", searchBuffer)) {
         currentSearch = searchBuffer;
         // Clear visibility cache when search changes
         nodeVisibility.clear();
         // If search is empty, clear the current search to show all files
-        if (strlen(searchBuffer) == 0) {
+        if (searchBuffer.empty()) {
             currentSearch.clear();
         }
     }
@@ -481,48 +490,44 @@ void BookOrganizer::renderMetadataPanel() {
 
     // Title input
     ImGui::Text("Title:");
-    if (ImGui::InputText("##Title", titleBuffer, sizeof(titleBuffer))) {
+    if (ImGuiStringInput("##Title", titleBuffer)) {
         metadataChanged = true;
         if (useTitleFromMetadata) {
-            strncpy(filenameTitle, titleBuffer, sizeof(filenameTitle) - 1);
-            filenameTitle[sizeof(filenameTitle) - 1] = '\0';
+            filenameTitle = titleBuffer;
         }
     }
 
     // Author input
     ImGui::Text("Authors:");
-    if (ImGui::InputText("##Author", authorBuffer, sizeof(authorBuffer))) {
+    if (ImGuiStringInput("##Author", authorBuffer)) {
         metadataChanged = true;
         if (useAuthorFromMetadata) {
-            strncpy(filenameAuthor, authorBuffer, sizeof(filenameAuthor) - 1);
-            filenameAuthor[sizeof(filenameAuthor) - 1] = '\0';
+            filenameAuthor = authorBuffer;
         }
     }
 
     // Publish year input (both ebooks and PDFs)
     ImGui::Text("Publish Year:");
-    if (ImGui::InputText("##Year", yearBuffer, sizeof(yearBuffer))) {
+    if (ImGuiStringInput("##Year", yearBuffer, 16)) {
         metadataChanged = true;
         if (useYearFromMetadata) {
-            strncpy(filenameYear, yearBuffer, sizeof(filenameYear) - 1);
-            filenameYear[sizeof(filenameYear) - 1] = '\0';
+            filenameYear = yearBuffer;
         }
     }
 
     if (isEbook) {
         // Publisher input (ebooks only)
         ImGui::Text("Publisher:");
-        if (ImGui::InputText("##Publisher", publisherBuffer, sizeof(publisherBuffer))) {
+        if (ImGuiStringInput("##Publisher", publisherBuffer)) {
             metadataChanged = true;
             if (usePublisherFromMetadata) {
-                strncpy(filenamePublisher, publisherBuffer, sizeof(filenamePublisher) - 1);
-                filenamePublisher[sizeof(filenamePublisher) - 1] = '\0';
+                filenamePublisher = publisherBuffer;
             }
         }
 
         // Comments input (ebooks only)
         ImGui::Text("Comments:");
-        if (ImGui::InputTextMultiline("##Comments", commentsBuffer, sizeof(commentsBuffer), ImVec2(-1, 120), ImGuiInputTextFlags_CtrlEnterForNewLine)) {
+        if (ImGuiStringInputMultiline("##Comments", commentsBuffer, ImVec2(-1, 120), 1024, ImGuiInputTextFlags_CtrlEnterForNewLine)) {
             metadataChanged = true;
         }
     }
@@ -552,13 +557,12 @@ void BookOrganizer::renderMetadataPanel() {
         ImGui::Indent();
         bool titleMetadataChanged = ImGui::Checkbox("use value from metadata##Title", &useTitleFromMetadata);
         if (titleMetadataChanged && useTitleFromMetadata) {
-            strncpy(filenameTitle, titleBuffer, sizeof(filenameTitle) - 1);
-            filenameTitle[sizeof(filenameTitle) - 1] = '\0';
+            filenameTitle = titleBuffer;
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputText("##FilenameTitle", filenameTitle, sizeof(filenameTitle))) {
-            if (strcmp(filenameTitle, titleBuffer) != 0) {
+        if (ImGuiStringInput("##FilenameTitle", filenameTitle)) {
+            if (filenameTitle != titleBuffer) {
                 useTitleFromMetadata = false;
             }
         }
@@ -577,13 +581,12 @@ void BookOrganizer::renderMetadataPanel() {
         ImGui::Indent();
         bool authorMetadataChanged = ImGui::Checkbox("use value from metadata##Author", &useAuthorFromMetadata);
         if (authorMetadataChanged && useAuthorFromMetadata) {
-            strncpy(filenameAuthor, authorBuffer, sizeof(filenameAuthor) - 1);
-            filenameAuthor[sizeof(filenameAuthor) - 1] = '\0';
+            filenameAuthor = authorBuffer;
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputText("##FilenameAuthor", filenameAuthor, sizeof(filenameAuthor))) {
-            if (strcmp(filenameAuthor, authorBuffer) != 0) {
+        if (ImGuiStringInput("##FilenameAuthor", filenameAuthor)) {
+            if (filenameAuthor != authorBuffer) {
                 useAuthorFromMetadata = false;
             }
         }
@@ -602,13 +605,12 @@ void BookOrganizer::renderMetadataPanel() {
         ImGui::Indent();
         bool publisherMetadataChanged = ImGui::Checkbox("use value from metadata##Publisher", &usePublisherFromMetadata);
         if (publisherMetadataChanged && usePublisherFromMetadata) {
-            strncpy(filenamePublisher, publisherBuffer, sizeof(filenamePublisher) - 1);
-            filenamePublisher[sizeof(filenamePublisher) - 1] = '\0';
+            filenamePublisher = publisherBuffer;
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputText("##FilenamePublisher", filenamePublisher, sizeof(filenamePublisher))) {
-            if (strcmp(filenamePublisher, publisherBuffer) != 0) {
+        if (ImGuiStringInput("##FilenamePublisher", filenamePublisher)) {
+            if (filenamePublisher != publisherBuffer) {
                 usePublisherFromMetadata = false;
             }
         }
@@ -627,13 +629,12 @@ void BookOrganizer::renderMetadataPanel() {
         ImGui::Indent();
         bool yearMetadataChanged = ImGui::Checkbox("use value from metadata##Year", &useYearFromMetadata);
         if (yearMetadataChanged && useYearFromMetadata) {
-            strncpy(filenameYear, yearBuffer, sizeof(filenameYear) - 1);
-            filenameYear[sizeof(filenameYear) - 1] = '\0';
+            filenameYear = yearBuffer;
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputText("##FilenameYear", filenameYear, sizeof(filenameYear))) {
-            if (strcmp(filenameYear, yearBuffer) != 0) {
+        if (ImGuiStringInput("##FilenameYear", filenameYear, 16)) {
+            if (filenameYear != yearBuffer) {
                 useYearFromMetadata = false;
             }
         }
@@ -676,20 +677,11 @@ void BookOrganizer::selectBook(BookMetadata* book) {
     metadataChanged = false;
 
     // Copy current metadata to edit buffers
-    strncpy(titleBuffer, book->title.c_str(), sizeof(titleBuffer) - 1);
-    titleBuffer[sizeof(titleBuffer) - 1] = '\0';
-
-    strncpy(authorBuffer, book->author.c_str(), sizeof(authorBuffer) - 1);
-    authorBuffer[sizeof(authorBuffer) - 1] = '\0';
-
-    strncpy(yearBuffer, book->publishYear.c_str(), sizeof(yearBuffer) - 1);
-    yearBuffer[sizeof(yearBuffer) - 1] = '\0';
-
-    strncpy(publisherBuffer, book->publisher.c_str(), sizeof(publisherBuffer) - 1);
-    publisherBuffer[sizeof(publisherBuffer) - 1] = '\0';
-
-    strncpy(commentsBuffer, book->comments.c_str(), sizeof(commentsBuffer) - 1);
-    commentsBuffer[sizeof(commentsBuffer) - 1] = '\0';
+    titleBuffer = book->title;
+    authorBuffer = book->author;
+    yearBuffer = book->publishYear;
+    publisherBuffer = book->publisher;
+    commentsBuffer = book->comments;
 
     // Sync filename fields with metadata
     syncFilenameFieldsWithMetadata();
@@ -758,23 +750,23 @@ void BookOrganizer::updateMetadataWithEbookMeta() {
     std::string command = "ebook-meta";
 
     // Add title
-    if (strlen(titleBuffer) > 0) {
-        command += " --title=\"" + std::string(titleBuffer) + "\"";
+    if (!titleBuffer.empty()) {
+        command += " --title=\"" + titleBuffer + "\"";
     }
 
     // Add authors
-    if (strlen(authorBuffer) > 0) {
-        command += " --authors=\"" + std::string(authorBuffer) + "\"";
+    if (!authorBuffer.empty()) {
+        command += " --authors=\"" + authorBuffer + "\"";
     }
 
     // Add publisher (ebooks only)
-    if (isEbookFile(book.filePath) && strlen(publisherBuffer) > 0) {
-        command += " --publisher=\"" + std::string(publisherBuffer) + "\"";
+    if (isEbookFile(book.filePath) && !publisherBuffer.empty()) {
+        command += " --publisher=\"" + publisherBuffer + "\"";
     }
 
     // Add comments (ebooks only)
-    if (isEbookFile(book.filePath) && strlen(commentsBuffer) > 0) {
-        command += " --comments=\"" + std::string(commentsBuffer) + "\"";
+    if (isEbookFile(book.filePath) && !commentsBuffer.empty()) {
+        command += " --comments=\"" + commentsBuffer + "\"";
     }
 
     command += " \"" + filePath + "\"";
@@ -807,23 +799,23 @@ bool BookOrganizer::isEbookFile(const std::filesystem::path& filePath) const {
 std::string BookOrganizer::generateCustomFilename() const {
     std::string filename;
 
-    if (includeTitle && strlen(filenameTitle) > 0) {
+    if (includeTitle && !filenameTitle.empty()) {
         filename += filenameTitle;
     }
 
-    if (includeAuthor && strlen(filenameAuthor) > 0) {
+    if (includeAuthor && !filenameAuthor.empty()) {
         if (!filename.empty()) filename += " ";
-        filename += "[" + std::string(filenameAuthor) + "]";
+        filename += "[" + filenameAuthor + "]";
     }
 
-    if (includePublisher && strlen(filenamePublisher) > 0) {
+    if (includePublisher && !filenamePublisher.empty()) {
         if (!filename.empty()) filename += " ";
-        filename += "[" + std::string(filenamePublisher) + "]";
+        filename += "[" + filenamePublisher + "]";
     }
 
-    if (includeYear && strlen(filenameYear) > 0) {
+    if (includeYear && !filenameYear.empty()) {
         if (!filename.empty()) filename += " ";
-        filename += "(" + std::string(filenameYear) + ")";
+        filename += "(" + filenameYear + ")";
     }
 
     return filename;
@@ -831,23 +823,19 @@ std::string BookOrganizer::generateCustomFilename() const {
 
 void BookOrganizer::syncFilenameFieldsWithMetadata() {
     if (useTitleFromMetadata) {
-        strncpy(filenameTitle, titleBuffer, sizeof(filenameTitle) - 1);
-        filenameTitle[sizeof(filenameTitle) - 1] = '\0';
+        filenameTitle = titleBuffer;
     }
 
     if (useAuthorFromMetadata) {
-        strncpy(filenameAuthor, authorBuffer, sizeof(filenameAuthor) - 1);
-        filenameAuthor[sizeof(filenameAuthor) - 1] = '\0';
+        filenameAuthor = authorBuffer;
     }
 
     if (usePublisherFromMetadata) {
-        strncpy(filenamePublisher, publisherBuffer, sizeof(filenamePublisher) - 1);
-        filenamePublisher[sizeof(filenamePublisher) - 1] = '\0';
+        filenamePublisher = publisherBuffer;
     }
 
     if (useYearFromMetadata) {
-        strncpy(filenameYear, yearBuffer, sizeof(filenameYear) - 1);
-        filenameYear[sizeof(filenameYear) - 1] = '\0';
+        filenameYear = yearBuffer;
     }
 }
 
@@ -964,8 +952,7 @@ void BookOrganizer::setTargetDirectory(const std::string& targetDir) {
     targetDirectory = targetDir;
 
     // Update the UI buffer as well for consistency
-    strncpy(targetDirBuffer, targetDirectory.c_str(), sizeof(targetDirBuffer) - 1);
-    targetDirBuffer[sizeof(targetDirBuffer) - 1] = '\0';
+    targetDirBuffer = targetDirectory;
 
     if (showBookStatuses && !targetDirectory.empty()) {
         updateBookStatuses();

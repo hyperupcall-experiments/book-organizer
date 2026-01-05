@@ -97,11 +97,11 @@ private:
     BookMetadata* selectedBook = nullptr;
 
     // UI state for editing
-    char titleBuffer[256];
-    char authorBuffer[256];
-    char yearBuffer[16];
-    char publisherBuffer[256];
-    char commentsBuffer[1024];
+    std::string titleBuffer;
+    std::string authorBuffer;
+    std::string yearBuffer;
+    std::string publisherBuffer;
+    std::string commentsBuffer;
     bool metadataChanged = false;
 
     // Filename generation state
@@ -113,18 +113,18 @@ private:
     bool useAuthorFromMetadata = true;
     bool usePublisherFromMetadata = true;
     bool useYearFromMetadata = true;
-    char filenameTitle[256];
-    char filenameAuthor[256];
-    char filenamePublisher[256];
-    char filenameYear[16];
+    std::string filenameTitle;
+    std::string filenameAuthor;
+    std::string filenamePublisher;
+    std::string filenameYear;
 
     // Search functionality
-    char searchBuffer[256];
+    std::string searchBuffer;
     std::string currentSearch;
     std::unordered_map<TreeNode*, bool> nodeVisibility;
 
     // Target directory and status functionality
-    char targetDirBuffer[1024];
+    std::string targetDirBuffer;
     bool showBookStatuses = false;
     std::unordered_map<std::string, BookStatus> bookStatusCache;
 
