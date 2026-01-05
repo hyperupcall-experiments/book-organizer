@@ -10,6 +10,7 @@ struct BookMetadata {
     std::string comments;
     std::filesystem::path filePath;
     std::filesystem::file_time_type lastModified;
+    bool metadataLoaded = false;
 
     BookMetadata() = default;
 

@@ -14,7 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <stdexcept>
-#include <libb2/blake2.h>
+
 
 // Helper function to handle ImGui string input properly
 namespace {
@@ -95,19 +95,16 @@ void BookOrganizer::refreshBookList() {
 
     for (const auto& file : files) {
         books.emplace_back(file);
-        // Read actual metadata from ebook files
-        if (isEbookFile(file)) {
-            readMetadataFromFile(books.back());
-        }
+        // Metadata will be loaded on-demand when needed
     }
 
-    // Sort books by title
+    // Sort books by filename (avoid triggering metadata loading)
     std::sort(books.begin(), books.end(), [](const BookMetadata& a, const BookMetadata& b) {
-        std::string titleA = a.title.empty() ? a.filePath.stem().string() : a.title;
-        std::string titleB = b.title.empty() ? b.filePath.stem().string() : b.title;
-        std::transform(titleA.begin(), titleA.end(), titleA.begin(), ::tolower);
-        std::transform(titleB.begin(), titleB.end(), titleB.begin(), ::tolower);
-        return titleA < titleB;
+        std::string nameA = a.filePath.stem().string();
+        std::string nameB = b.filePath.stem().string();
+        std::transform(nameA.begin(), nameA.end(), nameA.begin(), ::tolower);
+        std::transform(nameB.begin(), nameB.end(), nameB.begin(), ::tolower);
+        return nameA < nameB;
     });
 
     // Build tree structure
@@ -704,6 +701,9 @@ void BookOrganizer::selectBook(BookMetadata* book) {
     selectedBook = book;
     metadataChanged = false;
 
+    // Ensure metadata is loaded before accessing it
+    ensureMetadataLoaded(*book);
+
     // Copy current metadata to edit buffers
     titleBuffer = book->title;
     authorBuffer = book->author;
@@ -1045,60 +1045,26 @@ BookStatus BookOrganizer::checkBookStatus(const BookMetadata& book) {
         return BookStatus::NotCopied;
     }
 
-    // File exists, check if checksums are different
+    // File exists, compare file sizes and modification times
     try {
-        std::string sourceChecksum = calculateBlake2Checksum(book.filePath);
-        std::string targetChecksum = calculateBlake2Checksum(targetPath);
+        auto sourceSize = std::filesystem::file_size(book.filePath);
+        auto targetSize = std::filesystem::file_size(targetPath);
 
-        if (sourceChecksum == targetChecksum) {
+        auto sourceTime = std::filesystem::last_write_time(book.filePath);
+        auto targetTime = std::filesystem::last_write_time(targetPath);
+
+        if (sourceSize == targetSize && sourceTime == targetTime) {
             return BookStatus::Copied;
         } else {
             return BookStatus::CopiedDifferent;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Error calculating checksums: " << e.what() << std::endl;
+        std::cerr << "Error comparing files: " << e.what() << std::endl;
         return BookStatus::Copied; // Assume copied if we can't verify
     }
 }
 
-std::string BookOrganizer::calculateBlake2Checksum(const std::filesystem::path& filePath) {
-    if (!std::filesystem::exists(filePath)) {
-        throw std::runtime_error("File does not exist: " + filePath.string());
-    }
 
-    std::ifstream file(filePath, std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file for reading: " + filePath.string());
-    }
-
-    blake2b_state state;
-    if (blake2b_init(&state, BLAKE2B_OUTBYTES) != 0) {
-        throw std::runtime_error("Failed to initialize Blake2b hash state");
-    }
-
-    constexpr size_t buffer_size = 64 * 1024; // 64KB buffer
-    std::vector<char> buffer(buffer_size);
-
-    while (file.read(buffer.data(), buffer_size) || file.gcount() > 0) {
-        if (blake2b_update(&state, buffer.data(), file.gcount()) != 0) {
-            throw std::runtime_error("Failed to update Blake2b hash with file data: " + filePath.string());
-        }
-    }
-
-    unsigned char hash[BLAKE2B_OUTBYTES];
-    if (blake2b_final(&state, hash, BLAKE2B_OUTBYTES) != 0) {
-        throw std::runtime_error("Failed to finalize Blake2b hash computation: " + filePath.string());
-    }
-
-    // Convert to hex string
-    std::ostringstream hexStream;
-    hexStream << std::hex << std::setfill('0');
-    for (size_t i = 0; i < BLAKE2B_OUTBYTES; ++i) {
-        hexStream << std::setw(2) << static_cast<unsigned>(hash[i]);
-    }
-
-    return hexStream.str();
-}
 
 void BookOrganizer::copyBookToTarget(const BookMetadata& book) {
     if (targetDirectory.empty()) {
@@ -1194,24 +1160,18 @@ void BookOrganizer::findUnpairedBooks() {
 void BookOrganizer::scanTargetDirectory(std::vector<UnpairedBook>& unpairedBooks) {
     std::cout << "Scanning target directory: " << targetDirectory << std::endl;
 
-    // Collect all source book paths and hashes for comparison
-    std::unordered_set<std::string> sourceHashes;
+    // Collect all source book paths for comparison
     std::unordered_set<std::string> sourcePaths;
-    std::unordered_map<std::string, std::filesystem::path> hashToSourcePath;
+    std::unordered_map<std::string, std::filesystem::path> nameToSourcePath;
 
     for (const auto& book : books) {
         // Add relative path
         std::filesystem::path relativePath = std::filesystem::relative(book.filePath, watchDirectory);
         sourcePaths.insert(relativePath.string());
 
-        // Add hash if we can calculate it
-        try {
-            std::string hash = calculateBlake2Checksum(book.filePath);
-            sourceHashes.insert(hash);
-            hashToSourcePath[hash] = relativePath;
-        } catch (const std::exception& e) {
-            std::cerr << "Error calculating hash for " << book.filePath.string() << ": " << e.what() << std::endl;
-        }
+        // Map filename to relative path for misplaced file detection
+        std::string fileName = relativePath.filename().string();
+        nameToSourcePath[fileName] = relativePath;
     }
 
     // Recursively scan target directory
@@ -1240,30 +1200,22 @@ void BookOrganizer::scanTargetDirectory(std::vector<UnpairedBook>& unpairedBooks
                 // Check if this file exists in source (by path)
                 bool foundByPath = sourcePaths.find(targetRelativePath.string()) != sourcePaths.end();
 
-                // Check if this file exists in source (by hash)
-                std::string targetHash;
-                bool foundByHash = false;
-                try {
-                    targetHash = calculateBlake2Checksum(filePath);
-                    foundByHash = sourceHashes.find(targetHash) != sourceHashes.end();
-                } catch (const std::exception& e) {
-                    std::cerr << "Error calculating hash for " << filePath.string() << ": " << e.what() << std::endl;
-                }
+                // Check if this file exists in source (by filename only)
+                bool foundByName = nameToSourcePath.find(fileName) != nameToSourcePath.end();
 
-                // If not found by path OR found by hash but not by path (wrong location), it's unpaired
+                // If not found by path, it's unpaired
                 if (!foundByPath) {
                     UnpairedBook unpaired;
                     unpaired.filePath = filePath;
-                    unpaired.blake2Hash = targetHash;
                     unpaired.fileName = fileName;
                     unpaired.fileSize = std::filesystem::file_size(filePath);
-                    unpaired.hasMatchingHash = foundByHash;
+                    unpaired.hasMatchingPath = foundByName;
 
-                    if (foundByHash) {
-                        unpaired.reason = "Wrong file path (content matches source file)";
+                    if (foundByName) {
+                        unpaired.reason = "Wrong file path (filename matches source file)";
                         // Store the correct source path for fixing
-                        auto it = hashToSourcePath.find(targetHash);
-                        if (it != hashToSourcePath.end()) {
+                        auto it = nameToSourcePath.find(fileName);
+                        if (it != nameToSourcePath.end()) {
                             unpaired.correctSourcePath = it->second;
                         }
                     } else {
@@ -1308,7 +1260,7 @@ void BookOrganizer::renderUnpairedBooksWindow() {
                     ImGui::PushID(static_cast<int>(i));
 
                     // File name with color coding
-                    if (unpaired.hasMatchingHash) {
+                    if (unpaired.hasMatchingPath) {
                         // Yellow for wrong location
                         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "%s", unpaired.fileName.c_str());
                     } else {
@@ -1334,11 +1286,10 @@ void BookOrganizer::renderUnpairedBooksWindow() {
                     if (ImGui::IsItemHovered()) {
                         ImGui::BeginTooltip();
                         ImGui::Text("Full Path: %s", unpaired.filePath.string().c_str());
-                        ImGui::Text("BLAKE2 Hash: %s", unpaired.blake2Hash.c_str());
                         ImGui::Text("File Size: %zu bytes (%.2f KB)", unpaired.fileSize, unpaired.fileSize / 1024.0);
                         ImGui::Text("Reason: %s", unpaired.reason.c_str());
-                        if (unpaired.hasMatchingHash) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Content matches source but wrong location");
+                        if (unpaired.hasMatchingPath) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Filename matches source but wrong location");
                             ImGui::Text("Should be at: %s", unpaired.correctSourcePath.string().c_str());
                         }
                         ImGui::EndTooltip();
@@ -1347,7 +1298,7 @@ void BookOrganizer::renderUnpairedBooksWindow() {
                     // Action button on same line
                     ImGui::SameLine(ImGui::GetWindowWidth() - 80);
 
-                    if (unpaired.hasMatchingHash) {
+                    if (unpaired.hasMatchingPath) {
                         // Fix button for files with matching content
                         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 0.8f));
                         if (ImGui::Button("Fix")) {
@@ -1392,17 +1343,21 @@ void BookOrganizer::fixUnpairedBook(const UnpairedBook& unpaired) {
 
         // Check if target file already exists
         if (std::filesystem::exists(correctTargetPath)) {
-            // If target exists and has same hash, just delete the misplaced file
+            // If target exists and has same size and time, just delete the misplaced file
             try {
-                std::string existingHash = calculateBlake2Checksum(correctTargetPath);
-                if (existingHash == unpaired.blake2Hash) {
+                auto existingSize = std::filesystem::file_size(correctTargetPath);
+                auto existingTime = std::filesystem::last_write_time(correctTargetPath);
+                auto misplacedSize = std::filesystem::file_size(unpaired.filePath);
+                auto misplacedTime = std::filesystem::last_write_time(unpaired.filePath);
+
+                if (existingSize == misplacedSize && existingTime == misplacedTime) {
                     std::filesystem::remove(unpaired.filePath);
                     std::cout << "Removed duplicate file: " << unpaired.filePath.filename().string()
                               << " (correct file already exists at " << correctTargetPath.string() << ")" << std::endl;
                     return;
                 }
             } catch (const std::exception& e) {
-                std::cerr << "Error calculating hash for existing file " << correctTargetPath.string() << ": " << e.what() << std::endl;
+                std::cerr << "Error comparing existing file " << correctTargetPath.string() << ": " << e.what() << std::endl;
             }
 
             // Different content - backup existing file
@@ -1517,5 +1472,14 @@ void BookOrganizer::readMetadataFromFile(BookMetadata& book) {
     if (!foundMetadata) {
         // The parseFromFilename() was already called during BookMetadata construction
         // so we don't need to do anything - just keep the existing values
+    }
+
+    // Mark metadata as loaded
+    book.metadataLoaded = true;
+}
+
+void BookOrganizer::ensureMetadataLoaded(BookMetadata& book) {
+    if (!book.metadataLoaded && isEbookFile(book.filePath)) {
+        readMetadataFromFile(book);
     }
 }

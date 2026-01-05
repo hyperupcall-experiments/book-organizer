@@ -7,7 +7,7 @@
 #include <mutex>
 #include <filesystem>
 #include <unordered_map>
-#include <libb2/blake2.h>
+
 
 enum class BookStatus {
     NotCopied,
@@ -17,10 +17,9 @@ enum class BookStatus {
 
 struct UnpairedBook {
     std::filesystem::path filePath;
-    std::string blake2Hash;
     std::string fileName;
     size_t fileSize;
-    bool hasMatchingHash;
+    bool hasMatchingPath;
     std::string reason;
     std::filesystem::path correctSourcePath;
 };
@@ -74,8 +73,9 @@ private:
     void executeNonBlocking(const std::string& program, const std::vector<std::string>& args);
     bool isCommandAvailable(const std::string& command);
     void readMetadataFromFile(BookMetadata& book);
+    void ensureMetadataLoaded(BookMetadata& book);
     BookStatus checkBookStatus(const BookMetadata& book);
-    std::string calculateBlake2Checksum(const std::filesystem::path& filePath);
+
     void copyBookToTarget(const BookMetadata& book);
     void updateBookStatuses();
     void findUnpairedBooks();
