@@ -4,7 +4,7 @@ An ImGUI C++ application for managing and syncing eBooks and PDFs.
 
 It's all vibe-coded so use at your own risk. I'll work on fixing some of the worst code later.
 
-![Image of application](./assets/application.png)
+![Image of application](./assets/preview.png)
 
 ## Features
 
@@ -21,6 +21,7 @@ git clone git@github.com:hyperupcall-experiments/book-organizer
 cd ./book-organizer
 conan install --build=missing .
 cmake -S . -B ./build -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release
-conan --build ./build
+cmake --build ./build
+cmake --install ./build --prefix ~/.local --strip
 ./build/BookOrganizer '/source directory' '/target directory'
 ```

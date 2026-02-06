@@ -1,0 +1,13 @@
+book-organizer/assets/book-organizer.desktop
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Book Organizer
+GenericName=Book Collection Organizer
+Comment=Organize and manage your book files from a watched directory
+Exec=BookOrganizer %f
+Icon=book-organizer
+Terminal=false
+Categories=Office;Utility;
+Keywords=books;library;organizer;collection;reader;
+StartupNotify=true
