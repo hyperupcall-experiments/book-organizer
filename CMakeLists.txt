@@ -11,6 +11,7 @@ find_package(imgui REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(opengl_system REQUIRED)
 find_package(efsw REQUIRED)
+find_package(toml11 REQUIRED)
 
 # Hacky, but it works.
 if (imgui_PACKAGE_FOLDER_DEBUG)
@@ -40,6 +41,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 	glfw
 	opengl::opengl
 	efsw::efsw
+	toml11::toml11
 	pthread
 	m
 	rt

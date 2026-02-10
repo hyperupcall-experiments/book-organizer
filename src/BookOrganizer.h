@@ -8,7 +8,6 @@
 #include <filesystem>
 #include <unordered_map>
 
-
 enum class BookStatus {
     NotCopied,
     Copied,
@@ -48,6 +47,11 @@ public:
     void shutdown();
     void setTargetDirectory(const std::string& targetDir);
     void setWatchDirectory(const std::string& watchDir);
+    void setConfigFilePath(const std::filesystem::path& configPath);
+
+    bool loadConfig();
+    bool saveConfig() const;
+    std::filesystem::path resolveConfigFilePath() const;
 
     bool isInitialized() const { return initialized; }
 
@@ -83,10 +87,12 @@ private:
     void deleteUnpairedBook(const std::filesystem::path& filePath);
     void fixUnpairedBook(const UnpairedBook& unpaired);
     void scanTargetDirectory(std::vector<UnpairedBook>& unpairedBooks);
+    void syncDirectoryBuffers();
 
     bool initialized = false;
     std::string watchDirectory;
     std::string targetDirectory;
+    std::filesystem::path configFilePath;
     std::unique_ptr<FileWatcher> fileWatcher;
 
     std::vector<BookMetadata> books;

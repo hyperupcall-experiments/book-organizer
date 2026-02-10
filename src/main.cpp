@@ -22,39 +22,6 @@ static void sigchld_handler(int sig) {
 }
 
 int main(int argc, char* argv[]) {
-    std::string watchDirectory;
-    std::string targetDirectory;
-
-    // Show usage if help is requested
-    if (argc > 1 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
-        std::cout << "Usage: " << argv[0] << " [source_directory] [target_directory]" << std::endl;
-        std::cout << std::endl;
-        std::cout << "Arguments:" << std::endl;
-        std::cout << "  source_directory  Directory to watch for book files" << std::endl;
-        std::cout << "  target_directory  Optional target directory for copying/syncing" << std::endl;
-        std::cout << std::endl;
-        std::cout << "If no arguments are provided, you will be prompted for the source directory." << std::endl;
-        return 0;
-    }
-
-    if (argc > 1) {
-        watchDirectory = argv[1];
-        if (argc > 2) {
-            targetDirectory = argv[2];
-        }
-    } else {
-        std::cout << "Enter directory to watch: ";
-        std::getline(std::cin, watchDirectory);
-    }
-
-    if (watchDirectory.empty()) {
-        std::cerr << "No directory specified" << std::endl;
-        std::cerr << "Use -h or --help for usage information" << std::endl;
-        return 1;
-    }
-
-    std::cout << "Starting Book Organizer..." << std::endl;
-
     // Set up signal handler for zombie process cleanup
     struct sigaction sa;
     sa.sa_handler = sigchld_handler;
@@ -62,7 +29,10 @@ int main(int argc, char* argv[]) {
     sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
     sigaction(SIGCHLD, &sa, nullptr);
 
-    // Setup GLFW
+    // Initialize book organizer and load config
+    BookOrganizer organizer;
+    organizer.loadConfig();
+
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW" << std::endl;
@@ -146,20 +116,6 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "ImGui initialized successfully" << std::endl;
-
-    // Initialize book organizer
-    BookOrganizer organizer;
-    if (!organizer.initialize(watchDirectory)) {
-        std::cerr << "Failed to initialize book organizer" << std::endl;
-        return 1;
-    }
-
-    // Set target directory if provided
-    if (!targetDirectory.empty()) {
-        organizer.setTargetDirectory(targetDirectory);
-        std::cout << "Target directory set to: " << targetDirectory << std::endl;
-    }
-
     std::cout << "Book organizer initialized, starting main loop..." << std::endl;
 
     // Main loop

@@ -1,5 +1,6 @@
 #include "BookOrganizer.h"
 #include "imgui.h"
+#include <toml.hpp>
 #include <algorithm>
 #include <iostream>
 #include <filesystem>
@@ -21,18 +22,14 @@ namespace {
     bool ImGuiStringInput(const char* label, std::string& str, size_t maxSize = 256, ImGuiInputTextFlags flags = 0) {
         str.resize(maxSize);
         bool changed = ImGui::InputText(label, str.data(), str.size(), flags);
-        if (changed) {
-            str.resize(strlen(str.data()));
-        }
+        str.resize(strlen(str.data()));
         return changed;
     }
 
     bool ImGuiStringInputMultiline(const char* label, std::string& str, const ImVec2& size, size_t maxSize = 1024, ImGuiInputTextFlags flags = 0) {
         str.resize(maxSize);
         bool changed = ImGui::InputTextMultiline(label, str.data(), str.size(), size, flags);
-        if (changed) {
-            str.resize(strlen(str.data()));
-        }
+        str.resize(strlen(str.data()));
         return changed;
     }
 }
@@ -194,18 +191,7 @@ void BookOrganizer::sortTreeNode(TreeNode* node) {
 
 
 void BookOrganizer::render() {
-    if (!initialized) {
-        // Show error window
-        ImGui::SetNextWindowPos(ImVec2(50, 50), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(400, 200), ImGuiCond_FirstUseEver);
 
-        if (ImGui::Begin("Error##BookOrganizer")) {
-            ImGui::Text("Application not initialized");
-            ImGui::Text("Please check the directory path and try again.");
-        }
-        ImGui::End();
-        return;
-    }
 
     // Main window - fullscreen to viewport
     ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -221,22 +207,26 @@ void BookOrganizer::render() {
             ImGui::EndMenuBar();
         }
 
-        // Create two-column layout
-        ImGui::Columns(2, "MainColumns", false);
-        ImGui::SetColumnWidth(0, leftPanelWidth);
+        if (watchDirBuffer.empty() || targetDirBuffer.empty()) {
+            renderFileList();
+        } else {
+            // Create two-column layout
+            ImGui::Columns(2, "MainColumns", false);
+            ImGui::SetColumnWidth(0, leftPanelWidth);
 
-        renderFileList();
+            renderFileList();
 
-        ImGui::NextColumn();
+            ImGui::NextColumn();
 
-        renderMetadataPanel();
+            renderMetadataPanel();
 
-        ImGui::Columns(1);
+            ImGui::Columns(1);
+        }
     }
     ImGui::End();
 
     // Render unpaired books window if open
-    if (showUnpairedWindow) {
+    if (showUnpairedWindow && !watchDirBuffer.empty() && !targetDirBuffer.empty()) {
         renderUnpairedBooksWindow();
     }
 
@@ -299,6 +289,7 @@ void BookOrganizer::renderFileList() {
                     selectedPath[len - 1] = '\0';
                 }
                 targetDirBuffer = selectedPath;
+                std::cout << "FFF::::: " << targetDirBuffer << std::endl;
                 setTargetDirectory(targetDirBuffer);
             }
             pclose(pipe);
@@ -307,6 +298,11 @@ void BookOrganizer::renderFileList() {
 
     ImGui::Spacing();
     ImGui::Spacing();
+
+    if (watchDirBuffer.empty() || targetDirBuffer.empty()) {
+        ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.6f, 1.0f), "Set both directories to continue.");
+        return;
+    }
 
     // Search input
     ImGui::Text("Search:");
@@ -979,10 +975,11 @@ void BookOrganizer::openFileInFolderNonBlocking(const std::filesystem::path& fil
 }
 
 void BookOrganizer::setTargetDirectory(const std::string& targetDir) {
+    std::cout << "Setting target directory: [" << targetDir << "]" << std::endl;
     targetDirectory = targetDir;
-
-    // Update the UI buffer as well for consistency
     targetDirBuffer = targetDirectory;
+
+    saveConfig();
 
     if (showBookStatuses && !targetDirectory.empty()) {
         updateBookStatuses();
@@ -1012,8 +1009,11 @@ void BookOrganizer::setWatchDirectory(const std::string& watchDir) {
     pathToNode.clear();
 
     // Set new watch directory
+    std::cout << "Setting watch directory: [" << watchDir << "]" << std::endl;
     watchDirectory = watchDir;
     watchDirBuffer = watchDirectory;
+
+    saveConfig();
 
     // Initialize file watcher for new directory
     if (!watchDirectory.empty() && std::filesystem::exists(watchDirectory)) {
@@ -1026,8 +1026,13 @@ void BookOrganizer::setWatchDirectory(const std::string& watchDir) {
         // Refresh book list for new directory
         refreshBookList();
 
+        initialized = true;
         std::cout << "Watch directory changed to: " << watchDirectory << std::endl;
-    } else if (!watchDirectory.empty()) {
+        return;
+    }
+
+    initialized = false;
+    if (!watchDirectory.empty()) {
         std::cerr << "Watch directory does not exist: " << watchDirectory << std::endl;
     }
 }
@@ -1482,4 +1487,90 @@ void BookOrganizer::ensureMetadataLoaded(BookMetadata& book) {
     if (!book.metadataLoaded && isEbookFile(book.filePath)) {
         readMetadataFromFile(book);
     }
+}
+
+std::filesystem::path BookOrganizer::resolveConfigFilePath() const {
+    const char* xdgConfigHome = std::getenv("XDG_CONFIG_HOME");
+    std::filesystem::path configPath;
+
+    if (xdgConfigHome && *xdgConfigHome != '\0') {
+        configPath = std::filesystem::path(xdgConfigHome);
+    } else {
+        const char* home = std::getenv("HOME");
+        if (home) {
+            configPath = std::filesystem::path(home) / ".config";
+        } else {
+            return ""; // Cannot resolve
+        }
+    }
+
+    return configPath / "book-organizer" / "config.toml";
+}
+
+bool BookOrganizer::loadConfig() {
+    configFilePath = resolveConfigFilePath();
+    if (configFilePath.empty()) {
+        return false;
+    }
+
+    if (!std::filesystem::exists(configFilePath)) {
+        return false;
+    }
+
+    try {
+        const auto data = toml::parse(configFilePath.string());
+
+        if (data.contains("source_dir")) {
+            watchDirectory = toml::find<std::string>(data, "source_dir");
+            watchDirBuffer = watchDirectory;
+        }
+
+        if (data.contains("target_dir")) {
+            targetDirectory = toml::find<std::string>(data, "target_dir");
+            targetDirBuffer = targetDirectory;
+        }
+
+        // Trigger initialization if watch directory is loaded
+        if (!watchDirectory.empty() && std::filesystem::exists(watchDirectory)) {
+            initialize(watchDirectory);
+        }
+
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Error loading config: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool BookOrganizer::saveConfig() const {
+    std::filesystem::path path = resolveConfigFilePath();
+    if (path.empty()) {
+        std::cerr << "Cannot resolve config file path for saving" << std::endl;
+        return false;
+    }
+
+    std::cout << "Saving config to: " << path << std::endl;
+    std::cout << "  source_dir: [" << watchDirectory << "]" << std::endl;
+    std::cout << "  target_dir: [" << targetDirectory << "]" << std::endl;
+
+    try {
+        std::filesystem::create_directories(path.parent_path());
+
+        toml::value data = toml::table{
+            {"source_dir", watchDirectory},
+            {"target_dir", targetDirectory}
+        };
+
+        std::ofstream ofs(path);
+        if (ofs) {
+            ofs << std::setw(80) << data << std::endl;
+            std::cout << "Successfully wrote config to disk" << std::endl;
+            return true;
+        } else {
+            std::cerr << "Failed to open config file for writing: " << path << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error saving config: " << e.what() << std::endl;
+    }
+    return false;
 }
