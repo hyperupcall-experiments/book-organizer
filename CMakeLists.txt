@@ -67,3 +67,11 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png")
 		DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps
 	)
 endif()
+
+if (PROJECT_IS_TOP_LEVEL AND UNIX)
+	execute_process(
+		COMMAND ${CMAKE_COMMAND} -E create_symlink
+		${CMAKE_BINARY_DIR}/compile_commands.json
+		${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json
+	)
+endif()
